@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with academic tier, handle, and public key fingerprint",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 150 },
+        "handle": { "type": "string", "maxLength": 50 },
+        "studentTier": { "type": "string", "enum": ["High School", "Bachelor", "Masters", "PhD", "Post-PhD"] },
+        "institution": { "type": "string", "maxLength": 150 },
+        "fieldOfStudy": { "type": "string", "maxLength": 150 },
+        "researchFocus": { "type": "string", "maxLength": 500 },
+        "publicKeyFingerprint": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "studentTier", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Encrypted direct or group chat session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 120 },
+        "type": { "type": "string", "enum": ["direct", "secret", "study_circle", "channel"] },
+        "participantIds": { "type": "array" },
+        "isSecret": { "type": "boolean" },
+        "safetyNumber": { "type": "string", "maxLength": 80 },
+        "e2eeVerified": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "participantIds", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Signal-grade end-to-end encrypted message record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "ciphertext": { "type": "string", "maxLength": 20000 },
+        "iv": { "type": "string", "maxLength": 50 },
+        "tag": { "type": "string", "maxLength": 50 },
+        "alg": { "type": "string", "maxLength": 30 },
+        "keyFingerprint": { "type": "string", "maxLength": 100 },
+        "mediaType": { "type": "string", "enum": ["text", "image", "voice", "doc", "code", "academic_paper"] },
+        "isForwardProtected": { "type": "boolean" },
+        "burnAt": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "chatId", "senderId", "ciphertext", "iv", "tag", "timestamp"]
+    },
+    "StatusStory": {
+      "title": "StatusStory",
+      "description": "24-hour ephemeral encrypted status story",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string", "maxLength": 100 },
+        "content": { "type": "string", "maxLength": 1000 },
+        "mediaUrl": { "type": "string", "maxLength": 5000 },
+        "timestamp": { "type": "number" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "content", "timestamp", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile document indexed by Firebase Auth UID"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Chat conversations where user is a participant"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Subcollection of encrypted messages belonging to a chat"
+    },
+    "/stories/{storyId}": {
+      "schema": "StatusStory",
+      "description": "Ephemeral 24h status stories posted by users"
+    }
+  }
+}

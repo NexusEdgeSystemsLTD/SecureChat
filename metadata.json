@@ -1,0 +1,6 @@
+{
+  "name": "SecureChat",
+  "description": "WhatsApp-style messaging with Telegram secret chats, Signal E2E encryption, anti-tracking relay shields, AI adaptive interest profiling, and high school to post-PhD education mentorship.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
