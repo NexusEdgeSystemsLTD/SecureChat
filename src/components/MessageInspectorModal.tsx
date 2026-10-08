@@ -119,6 +119,50 @@ export const MessageInspectorModal: React.FC<MessageInspectorModalProps> = ({
             </div>
           </div>
 
+          {/* Encrypted Read-Ack Signal for E2E Consistency */}
+          <div className="bg-[#202C33] p-4 rounded-2xl border border-[#2A3942] space-y-2">
+            <div className="flex justify-between items-center text-[11px] font-sans">
+              <span className="flex items-center gap-1.5 text-[#53BDEB] font-semibold">
+                <ShieldCheck className="w-4 h-4" /> Encrypted 'Read-ACK' Signal (E2E Consistency)
+              </span>
+              <span className="text-[10px] font-mono bg-[#53BDEB]/20 text-[#53BDEB] px-2 py-0.5 rounded">
+                Signal-V2 Protocol
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="bg-[#111B21] p-2.5 rounded-xl border border-white/5 space-y-1">
+                <div className="text-[10px] text-[#8696A0]">Delivery Status:</div>
+                <div className="text-white font-semibold capitalize flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${message.status === 'read' ? 'bg-[#53BDEB]' : 'bg-emerald-400'}`} />
+                  {message.status === 'read' ? 'Read (Acknowledged)' : message.status}
+                </div>
+              </div>
+              <div className="bg-[#111B21] p-2.5 rounded-xl border border-white/5 space-y-1">
+                <div className="text-[10px] text-[#8696A0]">Read Timestamp:</div>
+                <div className="text-[#8696A0] font-mono">
+                  {message.readAt ? new Date(message.readAt).toLocaleTimeString() : 'Verified upon receipt'}
+                </div>
+              </div>
+            </div>
+            {message.readAckSignature && (
+              <div className="bg-[#111B21] p-2.5 rounded-xl border border-white/5">
+                <div className="flex justify-between text-[10px] text-[#8696A0] mb-1">
+                  <span>Encrypted Read-Ack Signature MAC:</span>
+                  <button
+                    onClick={() => handleCopy(message.readAckSignature!, 'readAck')}
+                    className="hover:text-white text-[#53BDEB] flex items-center gap-1"
+                  >
+                    {copiedKey === 'readAck' ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                    Copy MAC
+                  </button>
+                </div>
+                <div className="text-[#53BDEB] font-mono break-all text-[11px]">
+                  {message.readAckSignature}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Key Fingerprint & Algorithm */}
           <div className="bg-[#182229] p-3 rounded-2xl border border-[#222E35] flex flex-col md:flex-row justify-between items-center gap-2 text-xs">
             <div className="flex items-center gap-2 text-[#8696A0]">

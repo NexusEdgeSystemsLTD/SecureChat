@@ -25,15 +25,23 @@ import {
   GraduationCap, 
   ShieldAlert, 
   Download,
-  AlertTriangle
+  AlertTriangle,
+  Music,
+  CornerDownLeft,
+  X,
+  ChevronUp,
+  ChevronDown,
+  FolderLock,
+  Building2
 } from 'lucide-react';
-import { Chat, EncryptedPayload, Message, UserProfile } from '../types';
+import { Chat, CognitiveProfile, EncryptedPayload, Message, UserProfile } from '../types';
 import { stripExifFromImage } from '../utils/crypto';
 
 interface ChatAreaProps {
   chat: Chat;
   messages: Message[];
   currentUser: UserProfile;
+  cognitiveProfile?: CognitiveProfile;
   onSendMessage: (content: string, options?: {
     mediaType?: 'text' | 'image' | 'voice' | 'doc' | 'code' | 'academic_paper';
     mediaUrl?: string;
@@ -47,17 +55,22 @@ interface ChatAreaProps {
   onOpenMessageInspector: (msg: Message) => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onBackMobile?: () => void;
+  onOpenLyriaMusic?: () => void;
+  onOpenMultimodalStudio?: (tab?: 'image' | 'video' | 'search' | 'maps' | 'transcribe') => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   chat,
   messages,
   currentUser,
+  cognitiveProfile,
   onSendMessage,
   onOpenSafetyNumbers,
   onOpenMessageInspector,
   onStartCall,
   onBackMobile,
+  onOpenLyriaMusic,
+  onOpenMultimodalStudio,
 }) => {
   const [inputText, setInputText] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -69,6 +82,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [showChatMenu, setShowChatMenu] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [smartReplies, setSmartReplies] = useState<string[]>([]);
+
+  // Local Search Functionality (filters decrypted local state of messages by keyword)
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHighlightIndex, setSearchHighlightIndex] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -78,6 +97,59 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Smart Reply generation based on last message & cognitive profile
+  useEffect(() => {
+    if (!messages || messages.length === 0) {
+      setSmartReplies([]);
+      return;
+    }
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || !lastMsg.content || lastMsg.isBurned) {
+      setSmartReplies([]);
+      return;
+    }
+
+    const tendencies = cognitiveProfile?.cognitiveTendencies || [
+      'Axiomatic First-Principles Reasoner',
+      'Empirical Benchmark Driven',
+    ];
+    const tendenciesStr = tendencies.join(', ');
+
+    // 1. Instant local cognitive generation
+    const localReplies = generateLocalSmartReplies(
+      lastMsg.content,
+      tendenciesStr,
+      currentUser.studentTier || 'Scholar'
+    );
+    setSmartReplies(localReplies);
+
+    // 2. Async AI refinement from backend
+    let active = true;
+    fetch('/api/ai/smart-replies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lastMessage: lastMsg.content,
+        cognitiveTendencies: tendencies,
+        interests: cognitiveProfile?.interests?.map((i) => i.name) || [],
+        studentTier: currentUser.studentTier,
+        fieldOfStudy: currentUser.fieldOfStudy,
+        chatName: chat.name,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (active && data.success && Array.isArray(data.suggestions) && data.suggestions.length === 3) {
+          setSmartReplies(data.suggestions);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [messages, chat.id, cognitiveProfile, currentUser.studentTier]);
 
   // Update timer every second for self-destruct countdowns
   useEffect(() => {
@@ -264,6 +336,17 @@ async function ratchetStep(state, remoteEphemeralKey) {
                 {chat.name}
               </span>
               <ShieldCheck className="w-4 h-4 text-[#00A884] flex-shrink-0" />
+              {chat.departmentId && (
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 font-semibold px-1.5 py-0.2 rounded border border-amber-500/30 flex items-center gap-1">
+                  <FolderLock className="w-2.5 h-2.5" />
+                  AIR-GAPPED
+                </span>
+              )}
+              {chat.id === 'chat_exec_boardroom' && (
+                <span className="text-[10px] bg-amber-500/30 text-amber-200 font-bold px-1.5 py-0.2 rounded border border-amber-400 flex items-center gap-1">
+                  MD • CTO • DAF TRIAD
+                </span>
+              )}
             </div>
             <span className="text-xs text-[#8696A0] truncate flex items-center gap-1">
               {chat.isSecret ? (
@@ -282,6 +365,20 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1 text-[#AEBAC1]">
+          {/* Local Decrypted Message Search Button */}
+          <button
+            onClick={() => {
+              setIsSearchOpen((prev) => !prev);
+              if (isSearchOpen) setSearchQuery('');
+            }}
+            className={`p-2.5 rounded-full transition-colors ${
+              isSearchOpen ? 'bg-[#374248] text-[#00A884]' : 'hover:bg-[#374248] hover:text-[#00A884]'
+            }`}
+            title="Local In-Memory Message Search (Decrypted Local State)"
+          >
+            <Search className="w-5 h-5" />
+          </button>
+
           {/* Encrypted Audio Call */}
           <button
             onClick={() => onStartCall('audio')}
@@ -369,9 +466,68 @@ async function ratchetStep(state, remoteEphemeralKey) {
         </span>
       </div>
 
+      {/* Local Decrypted In-Memory Message Search Bar */}
+      {isSearchOpen && (
+        <div className="bg-[#202C33] border-b border-[#2A3942] px-4 py-2.5 z-20 flex items-center gap-3 animate-in slide-in-from-top-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-[#8696A0] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search local decrypted messages in this chat..."
+              className="w-full bg-[#111B21] text-[#E9EDEF] placeholder-[#8696A0] text-sm pl-9 pr-8 py-2 rounded-xl border border-transparent focus:border-[#00A884] focus:outline-none transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8696A0] hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="text-xs text-[#8696A0] shrink-0 font-mono">
+              {messages.filter((m) => !m.isBurned && m.content.toLowerCase().includes(searchQuery.toLowerCase())).length}{' '}
+              found
+            </div>
+          )}
+          <button
+            onClick={() => {
+              setIsSearchOpen(false);
+              setSearchQuery('');
+            }}
+            className="p-1.5 rounded-lg text-[#8696A0] hover:text-[#E9EDEF] hover:bg-[#111B21] transition-colors"
+            title="Close local search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Messages Stream */}
       <div className="flex-1 overflow-y-auto px-4 lg:px-12 py-4 space-y-3 z-10">
-        {messages.map((msg) => {
+        {(() => {
+          const trimmedQuery = searchQuery.trim().toLowerCase();
+          const filteredMessages = trimmedQuery
+            ? messages.filter((m) => m.content.toLowerCase().includes(trimmedQuery))
+            : messages;
+
+          if (trimmedQuery && filteredMessages.length === 0) {
+            return (
+              <div className="flex flex-col items-center justify-center py-16 text-[#8696A0]">
+                <Search className="w-10 h-10 text-[#2A3942] mb-3" />
+                <p className="text-sm font-medium text-[#E9EDEF]">No matching messages found</p>
+                <p className="text-xs text-[#8696A0] mt-1 max-w-xs text-center">
+                  Search is executed strictly client-side against the locally decrypted message state for '{searchQuery}'.
+                </p>
+              </div>
+            );
+          }
+
+          return filteredMessages.map((msg) => {
           const isMe = msg.senderId === currentUser.id;
 
           // Handle self-destruct countdown
@@ -517,8 +673,30 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
                 {/* Normal Text Content */}
                 {msg.mediaType !== 'code' && (
-                  <p className="whitespace-pre-wrap break-words leading-relaxed">
-                    {msg.content}
+                  <p
+                    className="whitespace-pre-wrap break-words leading-relaxed"
+                    style={{ fontSize: 'var(--bubble-text-size)', lineHeight: 'var(--bubble-line-height, 1.55)' }}
+                  >
+                    {searchQuery.trim() ? (
+                      (() => {
+                        const q = searchQuery.trim();
+                        const parts = msg.content.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+                        return parts.map((part, idx) =>
+                          part.toLowerCase() === q.toLowerCase() ? (
+                            <mark
+                              key={idx}
+                              className="bg-amber-400 text-black px-0.5 rounded font-semibold"
+                            >
+                              {part}
+                            </mark>
+                          ) : (
+                            part
+                          )
+                        );
+                      })()
+                    ) : (
+                      msg.content
+                    )}
                   </p>
                 )}
 
@@ -528,7 +706,11 @@ async function ratchetStep(state, remoteEphemeralKey) {
                   <button
                     onClick={() => onOpenMessageInspector(msg)}
                     className="hover:text-[#00A884] opacity-70 hover:opacity-100 transition-opacity p-0.5"
-                    title="Inspect AES-GCM Encrypted Payload (IV, Tag, Ciphertext)"
+                    title={
+                      msg.readAckSignature
+                        ? `Inspect E2EE Payload • Read-Ack MAC: ${msg.readAckSignature}`
+                        : 'Inspect AES-GCM Encrypted Payload (IV, Tag, Ciphertext)'
+                    }
                   >
                     <Eye className="w-3 h-3" />
                   </button>
@@ -540,8 +722,16 @@ async function ratchetStep(state, remoteEphemeralKey) {
                     })}
                   </span>
 
-                  {isMe && (
-                    <span>
+                  {isMe ? (
+                    <span
+                      title={
+                        msg.status === 'read'
+                          ? `Read & Acknowledged via E2E signal MAC: ${msg.readAckSignature || 'Verified'} (${msg.readAt ? new Date(msg.readAt).toLocaleTimeString() : 'Verified'})`
+                          : msg.status === 'delivered'
+                            ? 'Delivered to terminal'
+                            : 'Sent'
+                      }
+                    >
                       {msg.status === 'read' ? (
                         <CheckCheck className="w-4 h-4 text-[#53BDEB]" />
                       ) : msg.status === 'delivered' ? (
@@ -550,7 +740,11 @@ async function ratchetStep(state, remoteEphemeralKey) {
                         <Check className="w-4 h-4 text-[#8696A0]" />
                       )}
                     </span>
-                  )}
+                  ) : msg.readAckSignature ? (
+                    <span title={`E2E Read-Ack Signal Verified: ${msg.readAckSignature}`}>
+                      <CheckCheck className="w-3.5 h-3.5 text-[#53BDEB]/60" />
+                    </span>
+                  ) : null}
                 </div>
               </div>
 
@@ -571,7 +765,8 @@ async function ratchetStep(state, remoteEphemeralKey) {
               )}
             </div>
           );
-        })}
+        });
+      })()}
         <div ref={messagesEndRef} />
       </div>
 
@@ -629,6 +824,92 @@ async function ratchetStep(state, remoteEphemeralKey) {
               <div className="text-[10px] text-[#8696A0]">Syntax highlighted</div>
             </div>
           </button>
+
+          {onOpenMultimodalStudio && (
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                onOpenMultimodalStudio('image');
+              }}
+              className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[#182229] text-left text-sm text-[#E9EDEF]"
+            >
+              <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="font-medium">AI Multimodal Studio</div>
+                <div className="text-[10px] text-[#8696A0]">Veo Video &amp; Gemini Image</div>
+              </div>
+            </button>
+          )}
+
+          {onOpenLyriaMusic && (
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                onOpenLyriaMusic();
+              }}
+              className="flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-[#182229] text-left text-sm text-[#E9EDEF]"
+            >
+              <div className="p-2 rounded-lg bg-pink-500/20 text-pink-400">
+                <Music className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="font-medium">Lyria 3 Study Beats</div>
+                <div className="text-[10px] text-[#8696A0]">Focus concentration audio</div>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Smart Reply Suggestions Bar (Tailored by Cognitive Profile) */}
+      {smartReplies.length > 0 && !isRecordingVoice && (
+        <div className="bg-[#182229]/95 border-t border-[#2A3942] px-3 md:px-4 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar z-20 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-center gap-1.5 text-[11px] text-[#00A884] font-medium shrink-0 pr-2 border-r border-[#2A3942]">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span className="hidden sm:inline font-semibold">Smart Reply</span>
+            <span
+              className="text-[10px] text-[#8696A0] bg-[#111B21] px-1.5 py-0.5 rounded border border-white/5 truncate max-w-[120px]"
+              title={cognitiveProfile?.cognitiveTendencies?.[0] || 'Axiomatic Reasoner'}
+            >
+              {cognitiveProfile?.cognitiveTendencies?.[0]?.split(' ')[0] || 'Scholar'} Tone
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1">
+            {smartReplies.map((replyText, idx) => (
+              <div
+                key={idx}
+                className="flex items-center rounded-xl bg-[#202C33] hover:bg-[#2A3942] border border-[#2A3942] hover:border-[#00A884]/60 transition-all text-xs text-[#E9EDEF] overflow-hidden group shadow-sm shrink-0"
+              >
+                <button
+                  onClick={() => {
+                    setInputText(replyText);
+                    textareaRef.current?.focus();
+                  }}
+                  className="px-3 py-1.5 flex items-center gap-1.5 text-left whitespace-nowrap active:scale-98"
+                  title={`Click to fill into input: "${replyText}"`}
+                >
+                  <span className="line-clamp-1">{replyText}</span>
+                  <CornerDownLeft className="w-3 h-3 text-[#8696A0] group-hover:text-[#00A884] opacity-70 group-hover:opacity-100 transition-opacity shrink-0" />
+                </button>
+                <button
+                  onClick={() => {
+                    onSendMessage(replyText, {
+                      mediaType: 'text',
+                      selfDestructSeconds: selfDestructTimer > 0 ? selfDestructTimer : undefined,
+                      isForwardProtected: forwardLock,
+                    });
+                  }}
+                  className="px-2 py-1.5 hover:bg-[#00A884] hover:text-[#111B21] text-[#00A884] border-l border-[#2A3942] transition-colors"
+                  title="Send smart reply immediately"
+                >
+                  <Send className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -698,6 +979,7 @@ async function ratchetStep(state, remoteEphemeralKey) {
               onKeyDown={handleKeyDown}
               placeholder="Type an encrypted message (AES-256-GCM)..."
               rows={1}
+              style={{ fontSize: 'var(--input-text-size)' }}
               className="w-full bg-transparent text-sm text-[#E9EDEF] placeholder-[#8696A0] resize-none outline-none max-h-28"
             />
           )}
@@ -731,3 +1013,73 @@ async function ratchetStep(state, remoteEphemeralKey) {
     </div>
   );
 };
+
+/**
+ * Deterministic cognitive tone engine for generating context-aware smart replies
+ * based on last message semantics and tailored to student's cognitive tendencies & academic tier.
+ */
+function generateLocalSmartReplies(
+  msgText: string,
+  tendenciesStr: string,
+  tier: string
+): string[] {
+  const m = (msgText || '').toLowerCase();
+  const isFirstPrinciples = tendenciesStr.toLowerCase().includes('first-principles');
+  const isEmpirical = tendenciesStr.toLowerCase().includes('empirical') || tendenciesStr.toLowerCase().includes('benchmark');
+
+  if (m.includes('proof') || m.includes('math') || m.includes('theorem') || m.includes('lemma') || m.includes('equation') || m.includes('formula')) {
+    return [
+      "Let's formalize the reduction proof and check boundary constraints.",
+      "Could we verify this empirically against baseline polynomial commitments?",
+      "I will review Lemma 4.2 and draft the inductive verification steps."
+    ];
+  }
+  if (m.includes('code') || m.includes('algorithm') || m.includes('benchmark') || m.includes('latency') || m.includes('run') || m.includes('prototype')) {
+    return [
+      "I'll isolate the benchmark environment and measure p99 tail latency.",
+      "Should we profile the memory overhead under distributed Byzantine faults?",
+      "The minimal prototype is ready; let's execute seeded test vectors."
+    ];
+  }
+  if (m.includes('paper') || m.includes('thesis') || m.includes('abstract') || m.includes('conference') || m.includes('deadline')) {
+    return [
+      "I'm structuring the 250-word abstract highlighting our empirical delta.",
+      "Let's synchronize on the related work contrast matrix tomorrow.",
+      "Understood. I will prepare the reproducible artifact appendix this week."
+    ];
+  }
+  if (m.includes('call') || m.includes('voice') || m.includes('meet') || m.includes('discuss') || m.includes('sync')) {
+    return [
+      "I'm ready for the encrypted DTLS-SRTP voice session now.",
+      "Can we sync right after I document the experimental ablation results?",
+      "Sounds great, let's connect through our shielded onion relay."
+    ];
+  }
+  if (m.includes('question') || m.includes('how') || m.includes('what') || m.includes('why')) {
+    return [
+      `From first principles, the core invariant depends on our ${tier} bounds.`,
+      "Let's examine the baseline assumptions before drawing conclusions.",
+      "I can formulate a mathematical derivation to verify that directly."
+    ];
+  }
+  if (isFirstPrinciples) {
+    return [
+      `Understood from first principles; I'll formulate the ${tier} hypothesis.`,
+      "Could you clarify the underlying assumptions for these empirical metrics?",
+      "That aligns with our research roadmap—I will begin implementation."
+    ];
+  }
+  if (isEmpirical) {
+    return [
+      "I'll benchmark these metrics under controlled experimental conditions.",
+      "Could you share the baseline datasets for reproducibility validation?",
+      "Let's compare the empirical performance against current state-of-the-art."
+    ];
+  }
+  return [
+    `Thank you for the guidance; I'll review and apply this to my ${tier} work.`,
+    "Could you provide a minimal working example for clarification?",
+    "Understood! I'll update my research notes and proceed to the next milestone."
+  ];
+}
+

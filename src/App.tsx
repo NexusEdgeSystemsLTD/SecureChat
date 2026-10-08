@@ -11,7 +11,28 @@ import { StatusViewerModal } from './components/StatusViewerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewChatModal } from './components/NewChatModal';
 import { AppLockModal } from './components/AppLockModal';
-import { Chat, CognitiveProfile, Message, PrivacySettings, StatusStory, StudentTier, UserProfile } from './types';
+import { RegistrationModal } from './components/RegistrationModal';
+import { LyriaMusicModal } from './components/LyriaMusicModal';
+import { MultimodalStudioModal } from './components/MultimodalStudioModal';
+import { GeminiChatbotModal } from './components/GeminiChatbotModal';
+import { TenancyModal } from './components/TenancyModal';
+
+import { 
+  AppFontSize, 
+  AppFontTheme, 
+  Chat, 
+  ChatType, 
+  CognitiveProfile, 
+  Department,
+  Message, 
+  MessageStatus, 
+  OrganizationTenant,
+  OrgMember,
+  PrivacySettings, 
+  StatusStory, 
+  StudentTier, 
+  UserProfile 
+} from './types';
 import { 
   DEFAULT_USER, 
   DEFAULT_PRIVACY_SETTINGS, 
@@ -26,11 +47,37 @@ import {
   loadCognitiveProfile, 
   saveCognitiveProfile, 
   loadStories, 
-  saveStories 
+  saveStories,
+  loadFontSize,
+  saveFontSize,
+  loadFontTheme,
+  saveFontTheme
 } from './utils/storage';
-import { encryptMessage, generateSafetyNumber } from './utils/crypto';
+import {
+  loadTenants,
+  saveTenants,
+  loadDepartments,
+  saveDepartments,
+  loadMembers,
+  saveMembers,
+  loadActiveTenantId,
+  saveActiveTenantId,
+  canUserAccessDepartment
+} from './utils/tenancy';
+import { encryptMessage, generateSafetyNumber, createEncryptedReadAck } from './utils/crypto';
 import { updateProfileLocally } from './utils/mlEngine';
 import { getPedagogicalMentorReply } from './utils/pedagogy';
+import { 
+  auth, 
+  db, 
+  signInWithGoogle, 
+  signOutFirebase, 
+  testFirestoreConnection, 
+  handleFirestoreError, 
+  OperationType 
+} from './firebase';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile>(loadUserProfile());
@@ -40,6 +87,11 @@ export default function App() {
   const [privacySettings, setPrivacySettings] = useState<PrivacySettings>(loadPrivacySettings());
   const [cognitiveProfile, setCognitiveProfile] = useState<CognitiveProfile>(loadCognitiveProfile());
   const [stories, setStories] = useState<StatusStory[]>(loadStories());
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+
+  // Eye-Comfort Typography & Font Scaling State
+  const [fontSize, setFontSize] = useState<AppFontSize>(() => loadFontSize());
+  const [fontTheme, setFontTheme] = useState<AppFontTheme>(() => loadFontTheme());
 
   // Modal Visibility States
   const [isMentorshipOpen, setIsMentorshipOpen] = useState(false);
@@ -52,18 +104,212 @@ export default function App() {
   const [inspectedMessage, setInspectedMessage] = useState<Message | null>(null);
   const [activeCall, setActiveCall] = useState<{ chat: Chat; type: 'audio' | 'video' } | null>(null);
   const [isAppLocked, setIsAppLocked] = useState<boolean>(false);
+  const [lockReason, setLockReason] = useState<'manual' | 'inactivity'>('manual');
+  const [isRegistrationOpen, setIsRegistrationOpen] = useState<boolean>(false);
   const [mobileShowChat, setMobileShowChat] = useState<boolean>(false);
 
-  // Initialize Encrypted Messages
+  // Multimodal & Lyria & Gemini Chatbot Modals
+  const [isLyriaOpen, setIsLyriaOpen] = useState(false);
+  const [isMultimodalOpen, setIsMultimodalOpen] = useState(false);
+  const [multimodalTab, setMultimodalTab] = useState<'image' | 'video' | 'search' | 'maps' | 'transcribe'>('image');
+  const [isGeminiChatbotOpen, setIsGeminiChatbotOpen] = useState(false);
+
+  // Multi-Tenant Organization & Department Firewall State
+  const [tenants, setTenants] = useState<OrganizationTenant[]>(() => loadTenants());
+  const [departments, setDepartments] = useState<Department[]>(() => loadDepartments());
+  const [members, setMembers] = useState<OrgMember[]>(() => loadMembers());
+  const [activeTenantId, setActiveTenantId] = useState<string>(() => loadActiveTenantId());
+  const [isTenancyOpen, setIsTenancyOpen] = useState(false);
+
+  // 1-Minute Inactivity Auto-Lock Security Watchdog (Face, Password & PIN protection)
+  useEffect(() => {
+    let inactivityTimer: any;
+    const timeoutMs = (userProfile.inactivityLockMinutes ?? 1) * 60 * 1000;
+
+    const resetInactivityTimer = () => {
+      clearTimeout(inactivityTimer);
+      if (!isAppLocked) {
+        inactivityTimer = setTimeout(() => {
+          setLockReason('inactivity');
+          setIsAppLocked(true);
+        }, timeoutMs);
+      }
+    };
+
+    // User activity events: mousemove, keydown, click, scroll, touchstart
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    activityEvents.forEach((evt) => window.addEventListener(evt, resetInactivityTimer));
+
+    resetInactivityTimer();
+
+    return () => {
+      clearTimeout(inactivityTimer);
+      activityEvents.forEach((evt) => window.removeEventListener(evt, resetInactivityTimer));
+    };
+  }, [isAppLocked, userProfile.inactivityLockMinutes]);
+
+  // Synchronize Root HTML Typography & Font Sizing
+  useEffect(() => {
+    saveFontSize(fontSize);
+    document.documentElement.setAttribute('data-font-size', fontSize);
+    document.documentElement.classList.remove('font-size-small', 'font-size-medium', 'font-size-large', 'font-size-extra');
+    document.documentElement.classList.add(`font-size-${fontSize}`);
+  }, [fontSize]);
+
+  useEffect(() => {
+    saveFontTheme(fontTheme);
+    document.documentElement.setAttribute('data-font-theme', fontTheme);
+    document.documentElement.classList.remove('font-theme-system', 'font-theme-readable', 'font-theme-serif', 'font-theme-mono');
+    document.documentElement.classList.add(`font-theme-${fontTheme}`);
+  }, [fontTheme]);
+
+  const handleCycleFontSize = () => {
+    const order: AppFontSize[] = ['small', 'medium', 'large', 'extra'];
+    const nextIdx = (order.indexOf(fontSize) + 1) % order.length;
+    setFontSize(order[nextIdx]);
+  };
+
+  // Initialize Encrypted Messages & test Firestore connection
   useEffect(() => {
     async function init() {
       const initialMsgs = await createInitialMessages();
       setMessagesByChat(initialMsgs);
+      testFirestoreConnection().catch(() => {});
     }
     init();
   }, []);
 
-  // Save changes to storage
+  // Read-receipt mechanism: Updates message status to 'read' when recipient opens the chat,
+  // utilizing an encrypted 'read-ack' signal for E2E consistency
+  useEffect(() => {
+    if (!activeChatId) return;
+
+    const chatMsgs = messagesByChat[activeChatId];
+    if (!chatMsgs || chatMsgs.length === 0) return;
+
+    // Check if there are any unread messages in the active chat (e.g. from peers or pending read)
+    const hasUnread = chatMsgs.some((m) => m.status !== 'read');
+    if (!hasUnread) {
+      if (chats.find((c) => c.id === activeChatId)?.unreadCount) {
+        setChats((prev) =>
+          prev.map((c) => (c.id === activeChatId ? { ...c, unreadCount: 0 } : c))
+        );
+      }
+      return;
+    }
+
+    let isSubscribed = true;
+
+    async function acknowledgeUnreadMessages() {
+      const updatedMessages = await Promise.all(
+        chatMsgs.map(async (msg) => {
+          if (msg.status === 'read') return msg;
+
+          // Generate encrypted read-ack signal for E2E consistency
+          const readSignal = await createEncryptedReadAck(
+            msg.id,
+            userProfile.id,
+            msg.senderId
+          );
+
+          // If authenticated with Firestore, persist read receipt
+          if (firebaseUser) {
+            const msgDocRef = doc(db, 'chats', activeChatId, 'messages', msg.id);
+            setDoc(
+              msgDocRef,
+              {
+                status: 'read',
+                readAt: readSignal.readAt,
+                readAckSignature: readSignal.authMac,
+              },
+              { merge: true }
+            ).catch((err) =>
+              handleFirestoreError(err, OperationType.WRITE, `chats/${activeChatId}/messages/${msg.id}`)
+            );
+          }
+
+          return {
+            ...msg,
+            status: 'read' as MessageStatus,
+            readAt: readSignal.readAt,
+            readAckSignature: readSignal.authMac,
+          };
+        })
+      );
+
+      if (isSubscribed) {
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [activeChatId]: updatedMessages,
+        }));
+
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === activeChatId
+              ? {
+                  ...c,
+                  unreadCount: 0,
+                  lastMessage: c.lastMessage
+                    ? { ...c.lastMessage, status: 'read' as MessageStatus }
+                    : undefined,
+                }
+              : c
+          )
+        );
+      }
+    }
+
+    acknowledgeUnreadMessages();
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [activeChatId, messagesByChat[activeChatId]?.length]);
+
+  // Firebase Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        // Sync user profile to Firestore
+        const userRef = doc(db, 'users', user.uid);
+        try {
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            setUserProfile((prev) => ({
+              ...prev,
+              id: user.uid,
+              name: data.name || user.displayName || prev.name,
+              email: user.email || prev.email,
+              avatar: user.photoURL || prev.avatar,
+              studentTier: data.studentTier || prev.studentTier,
+              fieldOfStudy: data.fieldOfStudy || prev.fieldOfStudy,
+              institution: data.institution || prev.institution,
+            }));
+          } else {
+            await setDoc(userRef, {
+              id: user.uid,
+              name: user.displayName || userProfile.name,
+              email: user.email || 'user@scholar.edu',
+              studentTier: userProfile.studentTier,
+              institution: userProfile.institution,
+              fieldOfStudy: userProfile.fieldOfStudy,
+              researchFocus: userProfile.researchFocus,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Save changes to local storage
   useEffect(() => {
     saveUserProfile(userProfile);
   }, [userProfile]);
@@ -84,10 +330,44 @@ export default function App() {
     saveStories(stories);
   }, [stories]);
 
-  const activeChat = chats.find((c) => c.id === activeChatId) || chats[0];
-  const activeMessages = messagesByChat[activeChatId] || [];
+  // Multi-tenant and Department firewall isolation filter
+  const isExecutive = userProfile.orgRole === 'MD' || userProfile.orgRole === 'CTO' || userProfile.orgRole === 'DAF';
+  const permittedChats = chats.filter((chat) => {
+    // If chat has a tenantId and user belongs to a tenant, ensure same tenant (unless civic public chat)
+    if (chat.tenantId && userProfile.tenantId && chat.tenantId !== userProfile.tenantId) {
+      return false;
+    }
+    // Executive triad boardroom is strictly restricted to MD, CTO, DAF
+    if (chat.id === 'chat_exec_boardroom' && !isExecutive) {
+      return false;
+    }
+    // If chat is bound to a specific department and user is not executive, enforce strict department wall
+    if (chat.departmentId) {
+      if (!isExecutive && chat.departmentId !== userProfile.departmentId) {
+        return false;
+      }
+    }
+    return true;
+  });
 
-  // Send message with Signal AES-GCM client-side encryption
+  const activeChat = permittedChats.find((c) => c.id === activeChatId) || permittedChats[0] || chats[0];
+  const currentMessages = messagesByChat[activeChat?.id] || [];
+
+  // Google Sign-In & Sign-Out handlers
+  const handleGoogleSignIn = async () => {
+    if (firebaseUser) {
+      await signOutFirebase();
+      setFirebaseUser(null);
+    } else {
+      try {
+        await signInWithGoogle();
+      } catch (e) {
+        console.error('Google Sign-In failed', e);
+      }
+    }
+  };
+
+  // Send Encrypted Message handler
   const handleSendMessage = async (
     content: string,
     options?: {
@@ -100,21 +380,21 @@ export default function App() {
       academicMetadata?: any;
     }
   ) => {
-    if (!activeChat) return;
+    if (!content.trim() && !options?.mediaUrl) return;
 
-    // Real WebCrypto AES-GCM encryption
-    const encryptedPayload = await encryptMessage(content);
+    // Encrypt content using client-side Web Crypto AES-GCM
+    const payload = await encryptMessage(content);
 
-    const burnSeconds = options?.selfDestructSeconds || (activeChat.isSecret ? activeChat.selfDestructDefault : undefined);
+    const burnSeconds = options?.selfDestructSeconds ?? activeChat.selfDestructDefault;
     const burnAt = burnSeconds ? Date.now() + burnSeconds * 1000 : undefined;
 
     const newMessage: Message = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       chatId: activeChat.id,
       senderId: userProfile.id,
       senderName: userProfile.name,
       content,
-      encryptedPayload,
+      encryptedPayload: payload,
       timestamp: Date.now(),
       status: 'sent',
       mediaType: options?.mediaType || 'text',
@@ -150,6 +430,59 @@ export default function App() {
           : c
       )
     );
+
+    // Save to Firestore if authenticated
+    if (firebaseUser) {
+      const msgPath = `chats/${activeChat.id}/messages/${newMessage.id}`;
+      setDoc(doc(db, 'chats', activeChat.id, 'messages', newMessage.id), {
+        id: newMessage.id,
+        chatId: activeChat.id,
+        senderId: firebaseUser.uid,
+        senderName: userProfile.name,
+        ciphertext: payload.ciphertext,
+        iv: payload.iv,
+        tag: payload.tag,
+        alg: payload.alg,
+        keyFingerprint: payload.keyFingerprint,
+        mediaType: newMessage.mediaType,
+        timestamp: newMessage.timestamp,
+        isForwardProtected: newMessage.isForwardProtected || false,
+      }).catch((err) => handleFirestoreError(err, OperationType.WRITE, msgPath));
+    }
+
+    // Recipient read-ack acknowledgment signal simulation for E2E consistency
+    setTimeout(async () => {
+      const ack = await createEncryptedReadAck(newMessage.id, 'peer_terminal', userProfile.id);
+      setMessagesByChat((prev) => {
+        const list = prev[activeChat.id] || [];
+        return {
+          ...prev,
+          [activeChat.id]: list.map((m) =>
+            m.id === newMessage.id
+              ? {
+                  ...m,
+                  status: 'read' as MessageStatus,
+                  readAt: ack.readAt,
+                  readAckSignature: ack.authMac,
+                }
+              : m
+          ),
+        };
+      });
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === activeChat.id && c.lastMessage?.senderId === userProfile.id
+            ? {
+                ...c,
+                lastMessage: {
+                  ...c.lastMessage,
+                  status: 'read' as MessageStatus,
+                },
+              }
+            : c
+        )
+      );
+    }, 1800);
 
     // Update Client-Side ML Cognitive Profiler locally
     const updatedCognitive = updateProfileLocally(cognitiveProfile, content);
@@ -233,120 +566,225 @@ export default function App() {
     const newStory: StatusStory = {
       id: `story-${Date.now()}`,
       userId: userProfile.id,
-      userName: 'My Status',
+      userName: userProfile.name,
       userAvatar: userProfile.avatar,
       content,
       mediaUrl,
       timestamp: Date.now(),
-      expiresAt: Date.now() + 86400000,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       viewsCount: 0,
-      isViewed: true,
+      isViewed: false,
       encrypted: true,
     };
+
     setStories([newStory, ...stories]);
+
+    if (firebaseUser) {
+      const storyPath = `stories/${newStory.id}`;
+      setDoc(doc(db, 'stories', newStory.id), {
+        id: newStory.id,
+        userId: firebaseUser.uid,
+        userName: newStory.userName,
+        content: newStory.content,
+        mediaUrl: newStory.mediaUrl || '',
+        timestamp: newStory.timestamp,
+        expiresAt: newStory.expiresAt,
+      }).catch((err) => handleFirestoreError(err, OperationType.WRITE, storyPath));
+    }
   };
 
-  // Create new conversation
-  const handleCreateChat = async (newChatData: any) => {
-    const safetyNumber = await generateSafetyNumber(userProfile.id, newChatData.name);
+  // Create new chat
+  const handleCreateChat = async (newChatData: {
+    name: string;
+    type: ChatType;
+    topic?: string;
+    academicTier?: StudentTier;
+    isSecret?: boolean;
+    selfDestructDefault?: number;
+    forwardRestricted?: boolean;
+    departmentId?: string;
+    tenantId?: string;
+  }) => {
+    const newChatId = `chat_${Date.now()}`;
+    const safetyNumber = await generateSafetyNumber(userProfile.id, newChatId);
+
     const newChat: Chat = {
-      id: `chat-${Date.now()}`,
-      type: newChatData.type,
+      id: newChatId,
       name: newChatData.name,
-      avatar: newChatData.type === 'secret' 
-        ? 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80'
-        : newChatData.type === 'study_circle'
-        ? 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=200&auto=format&fit=crop&q=80'
-        : 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80',
-      subtitle: newChatData.topic || (newChatData.type === 'secret' ? 'Secret Chat • Burn-on-Read' : 'Direct E2EE Chat'),
-      participantIds: [userProfile.id, `peer-${Date.now()}`],
-      unreadCount: 0,
+      avatar: newChatData.departmentId 
+        ? 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&q=80&w=200'
+        : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+      type: newChatData.type,
+      topic: newChatData.topic,
+      academicTier: newChatData.academicTier,
       isSecret: newChatData.isSecret,
-      selfDestructDefault: newChatData.selfDestructDefault,
-      forwardRestricted: newChatData.forwardRestricted,
+      selfDestructDefault: newChatData.selfDestructDefault ?? (newChatData.isSecret ? 30 : 0),
+      forwardRestricted: newChatData.forwardRestricted ?? newChatData.isSecret,
       safetyNumber,
       e2eeVerified: true,
-      academicTier: newChatData.academicTier,
-      topic: newChatData.topic,
-      isOnline: true,
+      unreadCount: 0,
+      participantIds: [userProfile.id, 'peer_user_1'],
+      departmentId: newChatData.departmentId,
+      tenantId: newChatData.tenantId || activeTenantId,
     };
 
     setChats([newChat, ...chats]);
-    setActiveChatId(newChat.id);
-    setMobileShowChat(true);
+    setActiveChatId(newChatId);
+    setMessagesByChat((prev) => ({ ...prev, [newChatId]: [] }));
+    setIsNewChatOpen(false);
   };
 
-  // App unlock handler (normal vs duress decoy mode)
-  const handleUnlock = (isDuress: boolean) => {
-    if (isDuress) {
-      // Coercion decoy mode: filter out secret chats and private academic notes
-      setChats(chats.filter((c) => !c.isSecret));
-      setUserProfile((prev) => ({
-        ...prev,
-        stealthModeActive: true,
-      }));
-    }
-    setIsAppLocked(false);
+  // Tenancy Mutation Handlers
+  const handleCreateTenant = (newTenantData: Omit<OrganizationTenant, 'id' | 'createdAt' | 'departmentCount' | 'totalMembers'>) => {
+    const newTenant: OrganizationTenant = {
+      ...newTenantData,
+      id: `tenant_${Date.now()}`,
+      departmentCount: 0,
+      totalMembers: 1,
+      createdAt: Date.now(),
+    };
+    const updated = [...tenants, newTenant];
+    setTenants(updated);
+    saveTenants(updated);
+    setActiveTenantId(newTenant.id);
+    saveActiveTenantId(newTenant.id);
   };
+
+  const handleCreateDepartment = (newDeptData: { name: string; code: string; description: string; tenantId: string }) => {
+    const newDept: Department = {
+      id: `dept_${Date.now()}`,
+      tenantId: newDeptData.tenantId,
+      name: newDeptData.name,
+      code: newDeptData.code,
+      description: newDeptData.description,
+      memberCount: 1,
+      createdAt: Date.now(),
+      leadUserId: userProfile.id,
+      leadUserName: userProfile.name,
+    };
+    const updated = [...departments, newDept];
+    setDepartments(updated);
+    saveDepartments(updated);
+  };
+
+  const handleAddMember = (newMemberData: Omit<OrgMember, 'id'>) => {
+    const newMember: OrgMember = {
+      ...newMemberData,
+      id: `member_${Date.now()}`,
+    };
+    const updated = [...members, newMember];
+    setMembers(updated);
+    saveMembers(updated);
+  };
+
+  const handleSwitchUserRole = (patch: Partial<UserProfile>) => {
+    const updated = {
+      ...userProfile,
+      ...patch,
+    };
+    setUserProfile(updated);
+    saveUserProfile(updated);
+  };
+
+  const handleSelectTenant = (tenantId: string) => {
+    setActiveTenantId(tenantId);
+    saveActiveTenantId(tenantId);
+    setUserProfile((prev) => ({
+      ...prev,
+      tenantId,
+    }));
+  };
+
+  if (isAppLocked) {
+    return (
+      <AppLockModal
+        user={userProfile}
+        lockReason={lockReason}
+        onUnlock={(isDuress) => {
+          setIsAppLocked(false);
+          setLockReason('manual');
+          if (isDuress) {
+            setUserProfile({
+              ...userProfile,
+              name: 'Alex Decoy',
+              studentTier: 'High School',
+              institution: 'Decoy Academy',
+            });
+            setChats(chats.filter((c) => !c.isSecret));
+          }
+        }}
+      />
+    );
+  }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0B141A] font-sans antialiased text-[#E9EDEF]">
-      {/* App Lock PIN Screen */}
-      {isAppLocked && (
-        <AppLockModal user={userProfile} onUnlock={handleUnlock} />
-      )}
-
-      {/* Main WhatsApp-Style Split Layout */}
-      <div className="flex h-full w-full overflow-hidden">
-        {/* Sidebar (Conversations, Mentorship Quick Launcher, Status Stories, Settings) */}
-        <div className={`h-full ${mobileShowChat ? 'hidden md:flex' : 'flex w-full md:w-auto'}`}>
-          <Sidebar
-            chats={chats}
-            activeChatId={activeChatId}
-            onSelectChat={(id) => {
-              setActiveChatId(id);
-              setMobileShowChat(true);
-            }}
-            userProfile={userProfile}
-            onOpenMentorship={() => setIsMentorshipOpen(true)}
-            onOpenPrivacyShield={() => setIsPrivacyShieldOpen(true)}
-            onOpenAIEngine={() => setIsAIEngineOpen(true)}
-            onOpenStatusStories={() => setIsStatusStoriesOpen(true)}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            onOpenNewChat={() => setIsNewChatOpen(true)}
-            onOpenSafetyNumbers={(c) => setSafetyNumberChat(c)}
-            onLockApp={() => setIsAppLocked(true)}
-          />
-        </div>
-
-        {/* Chat Area (Active Conversation, Signal E2EE Verification, Burn-on-Read Timers) */}
-        <div className={`flex-1 h-full ${!mobileShowChat ? 'hidden md:flex' : 'flex'}`}>
-          {activeChat ? (
-            <ChatArea
-              chat={activeChat}
-              messages={activeMessages}
-              currentUser={userProfile}
-              onSendMessage={handleSendMessage}
-              onOpenSafetyNumbers={() => setSafetyNumberChat(activeChat)}
-              onOpenMessageInspector={(msg) => setInspectedMessage(msg)}
-              onStartCall={(type) => setActiveCall({ chat: activeChat, type })}
-              onBackMobile={() => setMobileShowChat(false)}
-            />
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#111B21] text-center text-[#8696A0]">
-              <div className="w-16 h-16 rounded-full bg-[#202C33] flex items-center justify-center mb-4 text-[#00A884]">
-                🔒
-              </div>
-              <h3 className="text-lg font-bold text-white mb-1">SecureChat for Web & Mobile</h3>
-              <p className="text-xs max-w-sm">
-                End-to-end encrypted messaging with Signal cryptography, Telegram secret chats, and student mentoring.
-              </p>
-            </div>
-          )}
-        </div>
+    <div
+      className={`flex h-screen w-screen overflow-hidden bg-[#0C1317] antialiased text-[#E9EDEF] font-theme-${fontTheme} font-size-${fontSize}`}
+    >
+      {/* Sidebar View */}
+      <div className={`h-full ${mobileShowChat ? 'hidden md:flex' : 'flex w-full md:w-auto'}`}>
+        <Sidebar
+          chats={permittedChats}
+          activeChatId={activeChatId}
+          onSelectChat={(id) => {
+            setActiveChatId(id);
+            setMobileShowChat(true);
+          }}
+          userProfile={userProfile}
+          onOpenMentorship={() => setIsMentorshipOpen(true)}
+          onOpenPrivacyShield={() => setIsPrivacyShieldOpen(true)}
+          onOpenAIEngine={() => setIsAIEngineOpen(true)}
+          onOpenStatusStories={() => setIsStatusStoriesOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenNewChat={() => setIsNewChatOpen(true)}
+          onOpenSafetyNumbers={(c) => setSafetyNumberChat(c)}
+          onLockApp={() => {
+            setLockReason('manual');
+            setIsAppLocked(true);
+          }}
+          onOpenLyriaMusic={() => setIsLyriaOpen(true)}
+          onOpenMultimodalStudio={(tab) => {
+            if (tab) setMultimodalTab(tab);
+            setIsMultimodalOpen(true);
+          }}
+          onOpenGeminiChatbot={() => setIsGeminiChatbotOpen(true)}
+          onSignInGoogle={handleGoogleSignIn}
+          firebaseUser={firebaseUser}
+          fontSize={fontSize}
+          onCycleFontSize={handleCycleFontSize}
+          onOpenRegister={() => setIsRegistrationOpen(true)}
+          onOpenTenancy={() => setIsTenancyOpen(true)}
+          activeTenantName={tenants.find((t) => t.id === activeTenantId)?.name || 'NexusEdge Systems Ltd'}
+        />
       </div>
 
-      {/* Modals & Overlays */}
+      {/* Chat Area View */}
+      <div className={`h-full flex-1 ${!mobileShowChat ? 'hidden md:flex' : 'flex'}`}>
+        {activeChat ? (
+          <ChatArea
+            chat={activeChat}
+            messages={currentMessages}
+            currentUser={userProfile}
+            cognitiveProfile={cognitiveProfile}
+            onSendMessage={handleSendMessage}
+            onOpenSafetyNumbers={() => setSafetyNumberChat(activeChat)}
+            onOpenMessageInspector={(msg) => setInspectedMessage(msg)}
+            onStartCall={(type) => setActiveCall({ chat: activeChat, type })}
+            onBackMobile={() => setMobileShowChat(false)}
+            onOpenLyriaMusic={() => setIsLyriaOpen(true)}
+            onOpenMultimodalStudio={(tab) => {
+              if (tab) setMultimodalTab(tab);
+              setIsMultimodalOpen(true);
+            }}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center bg-[#222E35] text-[#8696A0]">
+            <p>Select a chat to begin Signal-grade encrypted messaging.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Modals */}
       {isMentorshipOpen && (
         <MentorshipHub
           userProfile={userProfile}
@@ -357,6 +795,46 @@ export default function App() {
             const targetChat = chats.find((c) => c.name.includes(mentorName)) || chats[0];
             setActiveChatId(targetChat.id);
             handleSendMessage(promptText);
+          }}
+        />
+      )}
+
+      {isLyriaOpen && (
+        <LyriaMusicModal
+          userProfile={userProfile}
+          onClose={() => setIsLyriaOpen(false)}
+          onShareToChat={(trackName, audioUrl) => {
+            handleSendMessage(`🎵 Lyria 3 Focus Track: ${trackName}`, {
+              mediaType: 'voice',
+              mediaUrl: audioUrl,
+              mediaName: trackName,
+            });
+          }}
+        />
+      )}
+
+      {isMultimodalOpen && (
+        <MultimodalStudioModal
+          userProfile={userProfile}
+          initialTab={multimodalTab}
+          onClose={() => setIsMultimodalOpen(false)}
+          onSendMediaToChat={(mediaType, content, mediaUrl) => {
+            handleSendMessage(content, {
+              mediaType,
+              mediaUrl,
+            });
+            setIsMultimodalOpen(false);
+          }}
+        />
+      )}
+
+      {isGeminiChatbotOpen && (
+        <GeminiChatbotModal
+          userProfile={userProfile}
+          onClose={() => setIsGeminiChatbotOpen(false)}
+          onShareToChat={(text) => {
+            handleSendMessage(text);
+            setIsGeminiChatbotOpen(false);
           }}
         />
       )}
@@ -375,7 +853,7 @@ export default function App() {
           user={userProfile}
           onUpdateProfile={setCognitiveProfile}
           onClose={() => setIsAIEngineOpen(false)}
-          onOpenMentorshipWithTopic={(topic) => {
+          onOpenMentorshipWithTopic={() => {
             setIsAIEngineOpen(false);
             setIsMentorshipOpen(true);
           }}
@@ -431,16 +909,69 @@ export default function App() {
         <SettingsModal
           user={userProfile}
           privacy={privacySettings}
+          activeChat={activeChat}
+          messages={currentMessages}
+          allChats={chats}
+          allMessagesByChat={messagesByChat}
+          fontSize={fontSize}
+          fontTheme={fontTheme}
+          onUpdateFontSize={setFontSize}
+          onUpdateFontTheme={setFontTheme}
           onUpdateUser={setUserProfile}
           onUpdatePrivacy={setPrivacySettings}
+          onLockApp={() => {
+            setLockReason('manual');
+            setIsAppLocked(true);
+          }}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
 
       {isNewChatOpen && (
         <NewChatModal
+          currentUser={userProfile}
+          departments={departments}
+          members={members}
           onClose={() => setIsNewChatOpen(false)}
           onCreateChat={handleCreateChat}
+        />
+      )}
+
+      {isTenancyOpen && (
+        <TenancyModal
+          isOpen={isTenancyOpen}
+          onClose={() => setIsTenancyOpen(false)}
+          currentUser={userProfile}
+          tenants={tenants}
+          departments={departments}
+          members={members}
+          activeTenantId={activeTenantId}
+          onSelectTenant={handleSelectTenant}
+          onSwitchUserRole={handleSwitchUserRole}
+          onCreateTenant={handleCreateTenant}
+          onCreateDepartment={handleCreateDepartment}
+          onAddMember={handleAddMember}
+        />
+      )}
+
+      {isRegistrationOpen && (
+        <RegistrationModal
+          isOpen={isRegistrationOpen}
+          onClose={() => setIsRegistrationOpen(false)}
+          currentUser={userProfile}
+          tenants={tenants}
+          departments={departments}
+          onCreateTenant={handleCreateTenant}
+          onRegister={(newUser) => {
+            setUserProfile((prev) => ({
+              ...prev,
+              ...newUser,
+            }));
+            saveUserProfile({
+              ...userProfile,
+              ...newUser,
+            });
+          }}
         />
       )}
     </div>

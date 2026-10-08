@@ -1,1 +1,102 @@
 @import "tailwindcss";
+
+/* -------------------------------------------------------------
+ * Eye-Comfort Typography & Font Scaling System
+ * ------------------------------------------------------------- */
+
+/* Font Size Scales: Small (13px), Medium (15px), Large (17.5px), Extra (21px) */
+:root[data-font-size="small"],
+html.font-size-small,
+.font-size-small {
+  font-size: 13px !important;
+  --bubble-text-size: 0.825rem;
+  --bubble-line-height: 1.45;
+  --meta-text-size: 0.6875rem;
+  --input-text-size: 0.825rem;
+}
+
+:root[data-font-size="medium"],
+html.font-size-medium,
+.font-size-medium {
+  font-size: 15px !important;
+  --bubble-text-size: 0.95rem;
+  --bubble-line-height: 1.55;
+  --meta-text-size: 0.75rem;
+  --input-text-size: 0.95rem;
+}
+
+:root[data-font-size="large"],
+html.font-size-large,
+.font-size-large {
+  font-size: 18px !important;
+  --bubble-text-size: 1.125rem;
+  --bubble-line-height: 1.65;
+  --meta-text-size: 0.85rem;
+  --input-text-size: 1.125rem;
+}
+
+:root[data-font-size="extra"],
+html.font-size-extra,
+.font-size-extra {
+  font-size: 21px !important;
+  --bubble-text-size: 1.3rem;
+  --bubble-line-height: 1.75;
+  --meta-text-size: 0.95rem;
+  --input-text-size: 1.3rem;
+}
+
+/* Font Family Themes for Eye Strain Relief */
+:root[data-font-theme="system"],
+html.font-theme-system,
+.font-theme-system {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+:root[data-font-theme="readable"],
+html.font-theme-readable,
+.font-theme-readable {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Open Sans", sans-serif !important;
+  letter-spacing: 0.018em;
+  line-height: 1.6;
+}
+
+:root[data-font-theme="serif"],
+html.font-theme-serif,
+.font-theme-serif {
+  font-family: "Georgia", "Cambria", "Times New Roman", serif !important;
+  letter-spacing: 0.012em;
+  line-height: 1.65;
+}
+
+:root[data-font-theme="mono"],
+html.font-theme-mono,
+.font-theme-mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace !important;
+  letter-spacing: -0.01em;
+}
+
+/* Global Smooth Rendering */
+body {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}

@@ -1,4 +1,4 @@
-import { Chat, CognitiveProfile, Message, PrivacySettings, StatusStory, UserProfile } from '../types';
+import { AppFontSize, AppFontTheme, Chat, CognitiveProfile, Message, PrivacySettings, StatusStory, UserProfile } from '../types';
 import { encryptMessage, generateSafetyNumber } from './crypto';
 import { INITIAL_COGNITIVE_PROFILE } from './mlEngine';
 
@@ -11,6 +11,8 @@ const STORAGE_KEYS = {
   STORIES: 'securechat_stories',
   ACTIVE_CHAT_ID: 'securechat_active_chat_id',
   DURESS_DECOY: 'securechat_duress_active',
+  FONT_SIZE: 'securechat_font_size',
+  FONT_THEME: 'securechat_font_theme',
 };
 
 export const DEFAULT_USER: UserProfile = {
@@ -30,6 +32,17 @@ export const DEFAULT_USER: UserProfile = {
   pinCode: '1337',
   duressCode: '0000',
   stealthModeActive: false,
+  email: 'alex.thorne@scholar.edu',
+  nationalId: 'NAT-ID-8829-4109',
+  nationalIdVerified: true,
+  nationalIdType: 'National ID',
+  registrationStatus: 'verified',
+  password: 'Password123!',
+  inactivityLockMinutes: 1,
+  tenantId: 'tenant_nexusedge',
+  departmentId: undefined, // Global Executive
+  orgRole: 'MD',
+  orgTitle: 'Managing Director & CEO (Full Department Control)',
 };
 
 export const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
@@ -88,6 +101,116 @@ export const DEFAULT_STORIES: StatusStory[] = [
 ];
 
 export const INITIAL_CHATS: Chat[] = [
+  // --- NexusEdge Cross-Executive Channel (MD, CTO, DAF)
+  {
+    id: 'chat_exec_boardroom',
+    type: 'group',
+    name: 'Executive Directorate [MD, CTO, DAF]',
+    avatar: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=200&auto=format&fit=crop&q=80',
+    subtitle: 'Confidential Cross-Department Governance & Audit',
+    participantIds: ['user_master_001', 'user_marcus_cto', 'user_elena_daf'],
+    unreadCount: 1,
+    isPinned: true,
+    isOnline: true,
+    safetyNumber: '11029 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
+    e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
+    topic: 'Executive Directorate Strategy & Resource Allocation',
+    lastMessage: {
+      text: 'MD, CTO and DAF quorum confirmed. All departmental isolation firewalls are active and verified.',
+      timestamp: Date.now() - 1000 * 60 * 5,
+      senderId: 'user_marcus_cto',
+      status: 'read',
+    },
+  },
+  // --- Software & Cryptographic Engineering Department Chat
+  {
+    id: 'chat_dept_eng',
+    type: 'group',
+    name: 'Engineering & Crypto Systems (ENG)',
+    avatar: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=200&auto=format&fit=crop&q=80',
+    subtitle: 'Confidential to ENG Department + Executives',
+    participantIds: ['user_master_001', 'user_marcus_cto', 'user_turing_advisor', 'user_kevin_eng', 'user_maya_eng'],
+    unreadCount: 2,
+    isPinned: true,
+    isOnline: true,
+    safetyNumber: '22019 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
+    e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_eng',
+    topic: 'ZKP Cryptographic Relays & WASM Node Benchmarks',
+    lastMessage: {
+      text: 'Rust-WASM compiled cryptographic engine benchmark completed. 0.4ms zero-knowledge proof generation.',
+      timestamp: Date.now() - 1000 * 60 * 15,
+      senderId: 'user_kevin_eng',
+      status: 'read',
+    },
+  },
+  // --- Finance & Accounting Department Chat
+  {
+    id: 'chat_dept_fin',
+    type: 'group',
+    name: 'Finance, Treasury & Audit (FIN)',
+    avatar: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=200&auto=format&fit=crop&q=80',
+    subtitle: 'Confidential to FIN Department + Executives',
+    participantIds: ['user_master_001', 'user_elena_daf', 'user_julian_fin', 'user_clara_fin'],
+    unreadCount: 0,
+    isPinned: false,
+    safetyNumber: '33019 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
+    e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_fin',
+    topic: 'Q3 Financial Audit & Capital Reserves',
+    lastMessage: {
+      text: 'DAF approval received for Q3 operational infrastructure budget. Treasury accounts balanced.',
+      timestamp: Date.now() - 1000 * 60 * 30,
+      senderId: 'user_julian_fin',
+      status: 'read',
+    },
+  },
+  // --- HR & Talent Department Chat
+  {
+    id: 'chat_dept_hr',
+    type: 'group',
+    name: 'Human Resources & Talent (HR)',
+    avatar: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=200&auto=format&fit=crop&q=80',
+    subtitle: 'Confidential to HR Department + Executives',
+    participantIds: ['user_master_001', 'user_elena_daf', 'user_sarah', 'user_liam_hr'],
+    unreadCount: 0,
+    safetyNumber: '44019 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
+    e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_hr',
+    topic: 'Confidential Staffing, Onboarding & Security Clearances',
+    lastMessage: {
+      text: 'New cryptographic researcher security clearances vetted and processed.',
+      timestamp: Date.now() - 1000 * 60 * 50,
+      senderId: 'user_sarah',
+      status: 'read',
+    },
+  },
+  // --- Legal & Compliance Department Chat
+  {
+    id: 'chat_dept_legal',
+    type: 'group',
+    name: 'Legal, Compliance & Sovereignty (LEG)',
+    avatar: 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=200&auto=format&fit=crop&q=80',
+    subtitle: 'Confidential to Legal Department + Executives',
+    participantIds: ['user_master_001', 'user_elena_daf', 'user_david_legal'],
+    unreadCount: 0,
+    safetyNumber: '55019 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
+    e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_legal',
+    topic: 'Regulatory Air-gap & Sovereign Data Protection',
+    lastMessage: {
+      text: 'Multi-tenant air-gap compliance audit passed with zero cross-department data leakage.',
+      timestamp: Date.now() - 1000 * 3600 * 2,
+      senderId: 'user_david_legal',
+      status: 'read',
+    },
+  },
+  // --- Direct Chat with Advisor
   {
     id: 'chat_mentor_turing',
     type: 'study_circle',
@@ -95,14 +218,16 @@ export const INITIAL_CHATS: Chat[] = [
     avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
     subtitle: 'Principal AI Fellow & Doctoral Mentor',
     participantIds: ['user_master_001', 'mentor_turing'],
-    unreadCount: 1,
-    isPinned: true,
+    unreadCount: 0,
+    isPinned: false,
     isOnline: true,
     lastSeen: 'online',
     safetyNumber: '83921 47102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
     e2eeVerified: true,
     academicTier: 'PhD',
     topic: 'Doctoral Defense & Research Methodology',
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_eng',
     lastMessage: {
       text: 'I reviewed your LaTeX theorem formulation on zero-knowledge verifiable relays. The reduction proof holds firmly.',
       timestamp: Date.now() - 1000 * 60 * 12,
@@ -118,13 +243,15 @@ export const INITIAL_CHATS: Chat[] = [
     subtitle: 'VP of Engineering & Career Strategist',
     participantIds: ['user_master_001', 'mentor_vance'],
     unreadCount: 0,
-    isPinned: true,
+    isPinned: false,
     isOnline: true,
     lastSeen: 'online',
     safetyNumber: '19283 48102 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847',
     e2eeVerified: true,
     academicTier: 'Bachelor',
     topic: 'Tech Career & Systems Design Architecture',
+    tenantId: 'tenant_nexusedge',
+    departmentId: 'dept_fin',
     lastMessage: {
       text: 'Remember: In senior systems design interviews, explicitly calculate your read/write IOPS and cache eviction strategy before drawing topologies.',
       timestamp: Date.now() - 1000 * 60 * 45,
@@ -147,6 +274,7 @@ export const INITIAL_CHATS: Chat[] = [
     forwardRestricted: true,
     safetyNumber: '47182 91823 48102 49102 83719 20194 81029 38471 02938 47102 93847 18293',
     e2eeVerified: true,
+    tenantId: 'tenant_nexusedge',
     lastMessage: {
       text: 'This secret message will self-destruct 30 seconds after you view it. Tor relay hops active.',
       timestamp: Date.now() - 1000 * 60 * 3,
@@ -475,3 +603,44 @@ export function loadStories(): StatusStory[] {
 export function saveStories(stories: StatusStory[]): void {
   localStorage.setItem(STORAGE_KEYS.STORIES, JSON.stringify(stories));
 }
+
+export function loadFontSize(): AppFontSize {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.FONT_SIZE);
+    if (raw === 'small' || raw === 'medium' || raw === 'large' || raw === 'extra') {
+      return raw;
+    }
+  } catch (e) {
+    console.error('Failed to load font size', e);
+  }
+  return 'medium';
+}
+
+export function saveFontSize(size: AppFontSize): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.FONT_SIZE, size);
+  } catch (e) {
+    console.error('Failed to save font size', e);
+  }
+}
+
+export function loadFontTheme(): AppFontTheme {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.FONT_THEME);
+    if (raw === 'system' || raw === 'readable' || raw === 'serif' || raw === 'mono') {
+      return raw;
+    }
+  } catch (e) {
+    console.error('Failed to load font theme', e);
+  }
+  return 'system';
+}
+
+export function saveFontTheme(theme: AppFontTheme): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.FONT_THEME, theme);
+  } catch (e) {
+    console.error('Failed to save font theme', e);
+  }
+}
+

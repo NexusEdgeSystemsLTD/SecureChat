@@ -45,7 +45,12 @@ export interface Message {
     senderName: string;
     preview: string;
   };
+  readAckSignature?: string; // Encrypted read-ack signal MAC
+  readAt?: number;
 }
+
+export type AppFontSize = 'small' | 'medium' | 'large' | 'extra';
+export type AppFontTheme = 'system' | 'readable' | 'serif' | 'mono';
 
 export interface Chat {
   id: string;
@@ -74,6 +79,55 @@ export interface Chat {
   e2eeVerified?: boolean;
   academicTier?: StudentTier;
   topic?: string;
+  tenantId?: string; // Multi-tenant organization isolation
+  departmentId?: string; // Department boundary isolation
+}
+
+export type OrgRole = 'MD' | 'CTO' | 'DAF' | 'DEPT_HEAD' | 'MEMBER' | 'CITIZEN';
+
+export interface Department {
+  id: string;
+  tenantId: string;
+  name: string; // e.g. "Software Engineering", "Finance & Accounting", "Human Resources", "Legal", "Operations"
+  code: string; // e.g. "ENG", "FIN", "HR", "LEG", "OPS"
+  description: string;
+  iconName?: string;
+  leadUserId?: string;
+  leadUserName?: string;
+  memberCount: number;
+  createdAt: number;
+}
+
+export interface OrganizationTenant {
+  id: string;
+  name: string; // e.g. "NexusEdge Systems Ltd", "Ministry of Innovation & Technology", "Global Civic Federation"
+  slug: string;
+  type: 'enterprise' | 'government' | 'ngo' | 'public_civic';
+  logo: string;
+  description: string;
+  executiveUsers: {
+    mdId?: string;
+    ctoId?: string;
+    dafId?: string;
+  };
+  departmentCount: number;
+  totalMembers: number;
+  createdAt: number;
+  enforceDepartmentIsolation: boolean; // strict wall between departments
+}
+
+export interface OrgMember {
+  id: string;
+  userId: string;
+  tenantId: string;
+  departmentId?: string; // undefined if global executive (MD, CTO, DAF)
+  name: string;
+  email: string;
+  role: OrgRole;
+  title: string;
+  avatar: string;
+  status: 'active' | 'suspended';
+  phone?: string;
 }
 
 export interface StatusStory {
@@ -94,6 +148,7 @@ export interface UserProfile {
   id: string;
   name: string;
   handle: string;
+  email?: string;
   phone: string;
   avatar: string;
   bio: string;
@@ -107,6 +162,19 @@ export interface UserProfile {
   pinCode: string;
   duressCode: string; // Stealth code that opens decoy clean state
   stealthModeActive: boolean;
+  // National ID + Multi-Factor Identity Protection against arbitrary Meta/WhatsApp bans
+  nationalId?: string;
+  nationalIdVerified?: boolean;
+  nationalIdType?: 'National ID' | 'Passport' | 'State Issued ID' | 'Academic Identity Card';
+  registrationStatus?: 'verified' | 'pending' | 'provisional';
+  passwordHash?: string;
+  password?: string;
+  inactivityLockMinutes?: number; // default 1 minute
+  // Multi-Tenant Enterprise / Citizen Governance
+  tenantId?: string; // e.g. "tenant_nexusedge" or "tenant_civic"
+  departmentId?: string; // e.g. "dept_eng", "dept_fin", "dept_hr", "dept_ops", "dept_legal"
+  orgRole?: OrgRole; // MD, CTO, DAF, DEPT_HEAD, MEMBER, CITIZEN
+  orgTitle?: string; // e.g. "Managing Director & CEO", "Chief Technology Officer", "Director of Administration & Finance (DAF)"
 }
 
 export interface SecurityRelayHop {

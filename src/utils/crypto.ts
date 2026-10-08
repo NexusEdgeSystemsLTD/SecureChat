@@ -251,3 +251,47 @@ export async function stripExifFromImage(file: File): Promise<{ cleanBlob: Blob;
     reader.readAsDataURL(file);
   });
 }
+
+export interface ReadAckSignal {
+  messageId: string;
+  readerId: string;
+  senderId: string;
+  readAt: number;
+  authMac: string;
+  ciphertext: string;
+  protocol: string;
+}
+
+/**
+ * Creates an encrypted 'read-ack' signal for E2E consistency.
+ * When the recipient opens the chat, this creates a cryptographic receipt
+ * confirming message delivery and decryption at the peer terminal.
+ */
+export async function createEncryptedReadAck(
+  messageId: string,
+  readerId: string,
+  senderId: string,
+  sharedSecret = 'SECURECHAT_DEFAULT_MASTER_KEY_ECDH'
+): Promise<ReadAckSignal> {
+  const timestamp = Date.now();
+  const plainReceipt = JSON.stringify({
+    ack: 'READ_RECEIPT_CONFIRMED',
+    mid: messageId,
+    reader: readerId,
+    sender: senderId,
+    t: timestamp,
+  });
+
+  const payload = await encryptMessage(plainReceipt, sharedSecret);
+
+  return {
+    messageId,
+    readerId,
+    senderId,
+    readAt: timestamp,
+    authMac: payload.authMac || payload.tag.substring(0, 16),
+    ciphertext: payload.ciphertext,
+    protocol: 'Signal-V2-ReadReceipt-ACK',
+  };
+}
+

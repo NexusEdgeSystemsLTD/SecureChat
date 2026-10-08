@@ -2,7 +2,7 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "User profile with academic tier, handle, and public key fingerprint",
+      "description": "User profile with academic tier, handle, multi-tenant organization, and department role",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -14,23 +14,59 @@
         "fieldOfStudy": { "type": "string", "maxLength": 150 },
         "researchFocus": { "type": "string", "maxLength": 500 },
         "publicKeyFingerprint": { "type": "string", "maxLength": 100 },
+        "tenantId": { "type": "string", "maxLength": 100 },
+        "departmentId": { "type": "string", "maxLength": 100 },
+        "orgRole": { "type": "string", "enum": ["MD", "CTO", "DAF", "DEPT_HEAD", "MEMBER", "CITIZEN"] },
+        "orgTitle": { "type": "string", "maxLength": 150 },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
-      "required": ["id", "name", "email", "studentTier", "createdAt"]
+      "required": ["id", "name", "email", "createdAt"]
+    },
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Enterprise, government or civic organization tenant entity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 150 },
+        "slug": { "type": "string", "maxLength": 80 },
+        "type": { "type": "string", "enum": ["enterprise", "government", "ngo", "public_civic"] },
+        "description": { "type": "string", "maxLength": 1000 },
+        "enforceDepartmentIsolation": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "name", "slug", "type"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Isolated sub-department within an organization tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string", "maxLength": 100 },
+        "name": { "type": "string", "maxLength": 150 },
+        "code": { "type": "string", "maxLength": 20 },
+        "description": { "type": "string", "maxLength": 500 },
+        "leadUserId": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "tenantId", "name", "code"]
     },
     "Chat": {
       "title": "Chat",
-      "description": "Encrypted direct or group chat session",
+      "description": "Encrypted direct, group or department segregated chat session",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string", "maxLength": 120 },
-        "type": { "type": "string", "enum": ["direct", "secret", "study_circle", "channel"] },
+        "type": { "type": "string", "enum": ["direct", "secret", "study_circle", "channel", "group"] },
         "participantIds": { "type": "array" },
         "isSecret": { "type": "boolean" },
         "safetyNumber": { "type": "string", "maxLength": 80 },
         "e2eeVerified": { "type": "boolean" },
+        "tenantId": { "type": "string", "maxLength": 100 },
+        "departmentId": { "type": "string", "maxLength": 100 },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
@@ -78,9 +114,17 @@
       "schema": "User",
       "description": "User profile document indexed by Firebase Auth UID"
     },
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Multi-tenant organization boundary document"
+    },
+    "/tenants/{tenantId}/departments/{departmentId}": {
+      "schema": "Department",
+      "description": "Sub-departments within an organization tenant"
+    },
     "/chats/{chatId}": {
       "schema": "Chat",
-      "description": "Chat conversations where user is a participant"
+      "description": "Chat conversations where user is a participant or executive with departmental clearance"
     },
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "Message",

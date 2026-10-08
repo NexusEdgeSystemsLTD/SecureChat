@@ -21,14 +21,41 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // User Profile helper to inspect caller's tenant and role
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Executive Triad (MD, CTO, DAF) check for cross-department omniscient governance
+    function isExecutiveTriad(userData) {
+      return userData.orgRole == 'MD' || userData.orgRole == 'CTO' || userData.orgRole == 'DAF';
+    }
+
     function isChatParticipant(chatData) {
       return isSignedIn() && (request.auth.uid in chatData.participantIds);
     }
 
-    // Users Collection: users can only read and write their own profile
+    // Department boundary isolation:
+    // If chat is scoped to a department:
+    // 1. Executive Triad (MD, CTO, DAF) has full oversight
+    // 2. Otherwise, user must belong to the exact same department
+    function canAccessDepartmentChat(chatData) {
+      return isSignedIn() && (
+        !('departmentId' in chatData) || 
+        chatData.departmentId == null ||
+        isExecutiveTriad(getUserData()) ||
+        (getUserData().departmentId == chatData.departmentId)
+      );
+    }
+
+    // Users Collection
     match /users/{userId} {
       allow get: if isSignedIn();
-      allow list: if isSignedIn() && resource.data.id == request.auth.uid;
+      allow list: if isSignedIn() && (
+        resource.data.id == request.auth.uid || 
+        isExecutiveTriad(getUserData()) ||
+        (resource.data.departmentId == getUserData().departmentId)
+      );
       allow create: if isOwner(userId)
                     && request.resource.data.id == request.auth.uid
                     && request.resource.data.name is string
@@ -40,19 +67,48 @@ service cloud.firestore {
       allow delete: if isOwner(userId);
     }
 
+    // Tenants Collection (Organizations)
+    match /tenants/{tenantId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() 
+                    && isValidId(tenantId)
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() <= 150;
+      allow update: if isSignedIn() && isExecutiveTriad(getUserData());
+      allow delete: if isSignedIn() && getUserData().orgRole == 'MD';
+
+      // Departments Subcollection (Walled Department Silos)
+      match /departments/{departmentId} {
+        allow read: if isSignedIn() && (
+          isExecutiveTriad(getUserData()) ||
+          getUserData().departmentId == departmentId
+        );
+        allow create, update, delete: if isSignedIn() && isExecutiveTriad(getUserData());
+      }
+    }
+
     // Chats Collection
     match /chats/{chatId} {
-      allow get: if isSignedIn() && isChatParticipant(resource.data);
-      allow list: if isSignedIn() && (request.auth.uid in resource.data.participantIds);
+      allow get: if isSignedIn() 
+                 && isChatParticipant(resource.data)
+                 && canAccessDepartmentChat(resource.data);
+      allow list: if isSignedIn() 
+                  && (request.auth.uid in resource.data.participantIds)
+                  && canAccessDepartmentChat(resource.data);
       allow create: if isSignedIn()
                     && isValidId(chatId)
                     && (request.auth.uid in request.resource.data.participantIds)
                     && request.resource.data.name is string
-                    && request.resource.data.name.size() <= 120;
+                    && request.resource.data.name.size() <= 120
+                    && canAccessDepartmentChat(request.resource.data);
       allow update: if isSignedIn()
                     && isChatParticipant(resource.data)
+                    && canAccessDepartmentChat(resource.data)
                     && (request.auth.uid in request.resource.data.participantIds);
-      allow delete: if isSignedIn() && (resource.data.participantIds[0] == request.auth.uid);
+      allow delete: if isSignedIn() && (
+        resource.data.participantIds[0] == request.auth.uid ||
+        isExecutiveTriad(getUserData())
+      );
 
       // Subcollection: Messages
       match /messages/{messageId} {

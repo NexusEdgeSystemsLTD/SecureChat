@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   PhoneOff, 
   Mic, 
@@ -9,7 +9,9 @@ import {
   Share2, 
   Volume2, 
   Lock,
-  Globe2
+  Globe2,
+  Sparkles,
+  Radio
 } from 'lucide-react';
 import { Chat, UserProfile } from '../types';
 
@@ -30,21 +32,90 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [isVideoOff, setIsVideoOff] = useState(callType === 'audio');
   const [callDuration, setCallDuration] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected'>('connecting');
+  const [isLiveApiActive, setIsLiveApiActive] = useState(chat.id.startsWith('chat_mentor_'));
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     const connectTimer = setTimeout(() => {
       setConnectionStatus('connected');
-    }, 1500);
+    }, 1200);
 
     const interval = setInterval(() => {
       setCallDuration((prev) => prev + 1);
     }, 1000);
 
+    // Setup Gemini 3.8 Live WebSocket if AI Mentor
+    if (chat.id.startsWith('chat_mentor_')) {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/live`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setIsLiveApiActive(true);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.audio) {
+              playPcmAudio(data.audio);
+            }
+          } catch (e) {
+            console.error('Live audio parse err:', e);
+          }
+        };
+
+        ws.onerror = (e) => {
+          console.warn('Live WS notice:', e);
+        };
+      } catch (err) {
+        console.warn('WebSocket init err:', err);
+      }
+    }
+
     return () => {
       clearTimeout(connectTimer);
       clearInterval(interval);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+      }
     };
-  }, []);
+  }, [chat.id]);
+
+  const playPcmAudio = (base64Audio: string) => {
+    try {
+      if (!audioContextRef.current) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        audioContextRef.current = new AudioCtx({ sampleRate: 24000 });
+      }
+      const ctx = audioContextRef.current;
+      const binaryString = atob(base64Audio);
+      const len = binaryString.length;
+      const bytes = new Int16Array(len / 2);
+      for (let i = 0; i < len; i += 2) {
+        bytes[i / 2] = (binaryString.charCodeAt(i + 1) << 8) | binaryString.charCodeAt(i);
+      }
+      const float32Data = new Float32Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) {
+        float32Data[i] = bytes[i] / 32768.0;
+      }
+      const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
+      audioBuffer.copyToChannel(float32Data, 0);
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.start();
+    } catch (e) {
+      console.warn('PCM playback notice:', e);
+    }
+  };
 
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -54,15 +125,24 @@ export const CallModal: React.FC<CallModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0B141A]/95 backdrop-blur-md flex flex-col items-center justify-between p-6 select-none animate-in fade-in">
-      {/* Top Encryption Banner */}
+      {/* Top Encryption & Live API Banner */}
       <div className="w-full max-w-xl bg-[#202C33]/90 border border-[#2A3942] rounded-2xl px-4 py-2.5 flex items-center justify-between text-xs text-[#E9EDEF] shadow-lg">
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-[#00A884]" />
           <span className="font-semibold">E2EE Verified Call (DTLS-SRTP / AES-256)</span>
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-[#00A884]">
-          <Globe2 className="w-3.5 h-3.5" />
-          <span>Relayed via Zurich Onion Node</span>
+          {isLiveApiActive ? (
+            <span className="flex items-center gap-1 bg-[#00A884]/20 border border-[#00A884]/30 px-2 py-0.5 rounded-full text-[#00A884] font-mono text-[10px]">
+              <Sparkles className="w-3 h-3 animate-spin" />
+              gemini-3.8-live (Live API)
+            </span>
+          ) : (
+            <>
+              <Globe2 className="w-3.5 h-3.5" />
+              <span>Relayed via Zurich Onion Node</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -100,7 +180,9 @@ export const CallModal: React.FC<CallModalProps> = ({
               <div
                 key={i}
                 style={{ height: `${h}px` }}
-                className="w-1.5 bg-[#00A884] rounded-full animate-pulse"
+                className={`w-1.5 rounded-full transition-all duration-300 ${
+                  isLiveApiActive ? 'bg-gradient-to-t from-[#00A884] to-[#53BDEB] animate-bounce' : 'bg-[#00A884] animate-pulse'
+                }`}
               />
             ))}
           </div>
@@ -151,3 +233,4 @@ export const CallModal: React.FC<CallModalProps> = ({
     </div>
   );
 };
+
