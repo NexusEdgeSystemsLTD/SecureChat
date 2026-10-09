@@ -30,8 +30,9 @@ import {
   FolderLock,
   Crown
 } from 'lucide-react';
-import { AppFontSize, Chat, ChatType, StudentTier, UserProfile } from '../types';
+import { AppFontSize, AppLanguage, Chat, ChatType, StudentTier, UserProfile } from '../types';
 import { canUserAccessDepartment } from '../utils/tenancy';
+import { t } from '../utils/i18n';
 
 interface SidebarProps {
   chats: Chat[];
@@ -56,6 +57,7 @@ interface SidebarProps {
   onOpenRegister?: () => void;
   onOpenTenancy?: () => void;
   activeTenantName?: string;
+  language?: AppLanguage;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -80,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenRegister,
   onOpenTenancy,
   activeTenantName = 'NexusEdge Systems Ltd',
+  language = 'en',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'departments' | 'mentorship' | 'group' | 'secret'>('all');
@@ -388,7 +391,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search chats, departments, or members..."
+            placeholder={t('searchPlaceholder', language)}
             className="w-full bg-transparent text-sm text-[#E9EDEF] placeholder-[#8696A0] outline-none"
           />
           {searchQuery && (
@@ -411,7 +414,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : 'bg-[#202C33] text-[#8696A0] hover:bg-[#2A3942]'
             }`}
           >
-            All
+            {t('allChats', language)}
           </button>
           <button
             onClick={() => setFilterType('departments')}
@@ -422,7 +425,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }`}
           >
             <FolderLock className="w-3.5 h-3.5" />
-            Departments
+            {t('departments', language)}
           </button>
           <button
             onClick={() => setFilterType('unread')}
@@ -432,7 +435,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : 'bg-[#202C33] text-[#8696A0] hover:bg-[#2A3942]'
             }`}
           >
-            Unread
+            {t('unread', language)}
           </button>
           <button
             onClick={() => setFilterType('mentorship')}
@@ -443,7 +446,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }`}
           >
             <GraduationCap className="w-3.5 h-3.5" />
-            Mentorship
+            {t('mentorship', language)}
           </button>
           <button
             onClick={() => setFilterType('secret')}
@@ -454,7 +457,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }`}
           >
             <Lock className="w-3 h-3 text-rose-400" />
-            Secret
+            {t('secret', language)}
           </button>
           <button
             onClick={() => setFilterType('group')}
@@ -464,7 +467,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 : 'bg-[#202C33] text-[#8696A0] hover:bg-[#2A3942]'
             }`}
           >
-            Groups
+            {t('groups', language)}
           </button>
         </div>
 

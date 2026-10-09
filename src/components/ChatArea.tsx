@@ -34,8 +34,9 @@ import {
   FolderLock,
   Building2
 } from 'lucide-react';
-import { Chat, CognitiveProfile, EncryptedPayload, Message, UserProfile } from '../types';
+import { AppLanguage, Chat, CognitiveProfile, EncryptedPayload, Message, UserProfile } from '../types';
 import { stripExifFromImage } from '../utils/crypto';
+import { t } from '../utils/i18n';
 
 interface ChatAreaProps {
   chat: Chat;
@@ -57,6 +58,7 @@ interface ChatAreaProps {
   onBackMobile?: () => void;
   onOpenLyriaMusic?: () => void;
   onOpenMultimodalStudio?: (tab?: 'image' | 'video' | 'search' | 'maps' | 'transcribe') => void;
+  language?: AppLanguage;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -71,6 +73,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onBackMobile,
   onOpenLyriaMusic,
   onOpenMultimodalStudio,
+  language = 'en',
 }) => {
   const [inputText, setInputText] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -355,7 +358,7 @@ async function ratchetStep(state, remoteEphemeralKey) {
                   Secret Chat (Self-destruct: {chat.selfDestructDefault || selfDestructTimer || 'Off'}s)
                 </span>
               ) : chat.isOnline ? (
-                <span className="text-[#00A884]">online</span>
+                <span className="text-[#00A884]">{t('online', language)}</span>
               ) : (
                 <span>{chat.lastSeen || 'Signal E2EE Verified'}</span>
               )}
@@ -977,7 +980,7 @@ async function ratchetStep(state, remoteEphemeralKey) {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type an encrypted message (AES-256-GCM)..."
+              placeholder={t('typeMessagePlaceholder', language)}
               rows={1}
               style={{ fontSize: 'var(--input-text-size)' }}
               className="w-full bg-transparent text-sm text-[#E9EDEF] placeholder-[#8696A0] resize-none outline-none max-h-28"

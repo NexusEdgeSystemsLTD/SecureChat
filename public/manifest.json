@@ -1,0 +1,19 @@
+{
+  "short_name": "SecureChat",
+  "name": "SecureChat Sovereign E2EE",
+  "description": "WhatsApp-style messaging with Signal E2E encryption, WebAuthn biometrics, anti-tracking relay shields, and offline IndexedDB caching.",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192' fill='none'%3E%3Crect width='192' height='192' rx='42' fill='%23111B21'/%3E%3Ccircle cx='96' cy='96' r='60' fill='%2300A884' fill-opacity='0.15' stroke='%2300A884' stroke-width='4'/%3E%3Cpath d='M96 60v72M60 96h72' stroke='%2300A884' stroke-width='8' stroke-linecap='round'/%3E%3Cpath d='M76 80l40 32' stroke='%2325D366' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#111B21",
+  "background_color": "#0C1317",
+  "categories": ["communication", "productivity", "security"]
+}

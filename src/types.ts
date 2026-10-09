@@ -51,6 +51,7 @@ export interface Message {
 
 export type AppFontSize = 'small' | 'medium' | 'large' | 'extra';
 export type AppFontTheme = 'system' | 'readable' | 'serif' | 'mono';
+export type AppLanguage = 'en' | 'rw' | 'es' | 'fr';
 
 export interface Chat {
   id: string;

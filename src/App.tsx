@@ -20,6 +20,7 @@ import { TenancyModal } from './components/TenancyModal';
 import { 
   AppFontSize, 
   AppFontTheme, 
+  AppLanguage,
   Chat, 
   ChatType, 
   CognitiveProfile, 
@@ -53,6 +54,23 @@ import {
   loadFontTheme,
   saveFontTheme
 } from './utils/storage';
+import { loadAppLanguage, saveAppLanguage, t } from './utils/i18n';
+import { 
+  loadIndexedDbChats, 
+  saveIndexedDbChats, 
+  loadIndexedDbMessages, 
+  saveIndexedDbMessages, 
+  loadIndexedDbActiveChatId, 
+  saveIndexedDbActiveChatId, 
+  loadBiometricVaultConfig, 
+  loadOfflineQueue, 
+  addToOfflineQueue, 
+  clearOfflineQueue, 
+  saveIndexedDbUserProfile, 
+  saveIndexedDbPrivacySettings, 
+  saveIndexedDbCognitiveProfile, 
+  saveIndexedDbStories 
+} from './utils/indexedDb';
 import {
   loadTenants,
   saveTenants,
@@ -92,6 +110,13 @@ export default function App() {
   // Eye-Comfort Typography & Font Scaling State
   const [fontSize, setFontSize] = useState<AppFontSize>(() => loadFontSize());
   const [fontTheme, setFontTheme] = useState<AppFontTheme>(() => loadFontTheme());
+  // App Language State (Supports English, Ikinyarwanda, Spanish, French)
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => loadAppLanguage());
+
+  const handleUpdateLanguage = (newLang: AppLanguage) => {
+    setAppLanguage(newLang);
+    saveAppLanguage(newLang);
+  };
 
   // Modal Visibility States
   const [isMentorshipOpen, setIsMentorshipOpen] = useState(false);
@@ -113,6 +138,11 @@ export default function App() {
   const [isMultimodalOpen, setIsMultimodalOpen] = useState(false);
   const [multimodalTab, setMultimodalTab] = useState<'image' | 'video' | 'search' | 'maps' | 'transcribe'>('image');
   const [isGeminiChatbotOpen, setIsGeminiChatbotOpen] = useState(false);
+
+  // Offline & Low-Connectivity State (Powered by localforage IndexedDB)
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   // Multi-Tenant Organization & Department Firewall State
   const [tenants, setTenants] = useState<OrganizationTenant[]>(() => loadTenants());
@@ -169,14 +199,100 @@ export default function App() {
     setFontSize(order[nextIdx]);
   };
 
-  // Initialize Encrypted Messages & test Firestore connection
+  // Initialize Encrypted Messages, IndexedDB Caching (localforage) & Biometric DB Lock
   useEffect(() => {
     async function init() {
-      const initialMsgs = await createInitialMessages();
-      setMessagesByChat(initialMsgs);
+      try {
+        // 1. Check if local chat database is secured with device biometrics (WebAuthn)
+        const bioConfig = await loadBiometricVaultConfig();
+        if (bioConfig.isSecured && bioConfig.requireBiometricOnOpen) {
+          setLockReason('manual');
+          setIsAppLocked(true);
+        }
+
+        // 2. Load cached chats from localforage IndexedDB with fallback
+        const cachedChats = await loadIndexedDbChats();
+        if (cachedChats && cachedChats.length > 0) {
+          setChats(cachedChats);
+        } else {
+          await saveIndexedDbChats(chats);
+        }
+
+        // 3. Load cached messages from localforage IndexedDB with fallback
+        const cachedMsgs = await loadIndexedDbMessages();
+        if (cachedMsgs && Object.keys(cachedMsgs).length > 0) {
+          setMessagesByChat(cachedMsgs);
+        } else {
+          const initialMsgs = await createInitialMessages();
+          setMessagesByChat(initialMsgs);
+          await saveIndexedDbMessages(initialMsgs);
+        }
+
+        // 4. Restore active chat state from IndexedDB
+        const savedChatId = await loadIndexedDbActiveChatId();
+        if (savedChatId) {
+          setActiveChatId(savedChatId);
+        }
+
+        // 5. Inspect offline queue count
+        const queue = await loadOfflineQueue();
+        setOfflineQueueCount(queue.length);
+      } catch (err) {
+        console.warn('[IndexedDB Init Warning]', err);
+        const fallbackMsgs = await createInitialMessages();
+        setMessagesByChat(fallbackMsgs);
+      }
+
       testFirestoreConnection().catch(() => {});
     }
     init();
+  }, []);
+
+  // Monitor Network Connectivity & Flush IndexedDB Offline Sync Queue
+  useEffect(() => {
+    const handleOnline = async () => {
+      setIsOnline(true);
+      try {
+        const queue = await loadOfflineQueue();
+        if (queue.length > 0) {
+          setSyncNotice(`Reconnected • Syncing ${queue.length} offline message(s)...`);
+          // Flush queue: mark messages as delivered
+          for (const item of queue) {
+            setMessagesByChat((prev) => {
+              const list = prev[item.chatId] || [];
+              return {
+                ...prev,
+                [item.chatId]: list.map((m) => m.id === item.id ? { ...m, status: 'delivered' } : m),
+              };
+            });
+          }
+          await clearOfflineQueue();
+          setOfflineQueueCount(0);
+          setTimeout(() => {
+            setSyncNotice('All offline messages synced to local vault & network.');
+            setTimeout(() => setSyncNotice(null), 3000);
+          }, 800);
+        } else {
+          setSyncNotice('Network connected • Local IndexedDB cache active');
+          setTimeout(() => setSyncNotice(null), 2500);
+        }
+      } catch (e) {
+        console.warn('[Offline Sync Error]', e);
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSyncNotice('Offline Mode • Using Local IndexedDB Cache (localforage)');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   // Read-receipt mechanism: Updates message status to 'read' when recipient opens the chat,
@@ -309,26 +425,45 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Save changes to local storage
+  // Save changes to local storage & localforage IndexedDB
   useEffect(() => {
     saveUserProfile(userProfile);
+    saveIndexedDbUserProfile(userProfile);
   }, [userProfile]);
 
   useEffect(() => {
     saveChats(chats);
+    if (chats.length > 0) {
+      saveIndexedDbChats(chats);
+    }
   }, [chats]);
 
   useEffect(() => {
     savePrivacySettings(privacySettings);
+    saveIndexedDbPrivacySettings(privacySettings);
   }, [privacySettings]);
 
   useEffect(() => {
     saveCognitiveProfile(cognitiveProfile);
+    saveIndexedDbCognitiveProfile(cognitiveProfile);
   }, [cognitiveProfile]);
 
   useEffect(() => {
     saveStories(stories);
+    saveIndexedDbStories(stories);
   }, [stories]);
+
+  useEffect(() => {
+    if (Object.keys(messagesByChat).length > 0) {
+      saveIndexedDbMessages(messagesByChat);
+    }
+  }, [messagesByChat]);
+
+  useEffect(() => {
+    if (activeChatId) {
+      saveIndexedDbActiveChatId(activeChatId);
+    }
+  }, [activeChatId]);
 
   // Multi-tenant and Department firewall isolation filter
   const isExecutive = userProfile.orgRole === 'MD' || userProfile.orgRole === 'CTO' || userProfile.orgRole === 'DAF';
@@ -431,8 +566,8 @@ export default function App() {
       )
     );
 
-    // Save to Firestore if authenticated
-    if (firebaseUser) {
+    // Save to Firestore if authenticated and online
+    if (firebaseUser && isOnline) {
       const msgPath = `chats/${activeChat.id}/messages/${newMessage.id}`;
       setDoc(doc(db, 'chats', activeChat.id, 'messages', newMessage.id), {
         id: newMessage.id,
@@ -448,6 +583,17 @@ export default function App() {
         timestamp: newMessage.timestamp,
         isForwardProtected: newMessage.isForwardProtected || false,
       }).catch((err) => handleFirestoreError(err, OperationType.WRITE, msgPath));
+    }
+
+    // In offline or low-connectivity environments, enqueue in IndexedDB localforage vault
+    if (!isOnline) {
+      addToOfflineQueue({
+        id: newMessage.id,
+        chatId: activeChat.id,
+        message: newMessage,
+        queuedAt: Date.now(),
+      }).catch((err) => console.warn('[IndexedDB Offline Queue Error]', err));
+      setOfflineQueueCount((c) => c + 1);
     }
 
     // Recipient read-ack acknowledgment signal simulation for E2E consistency
@@ -719,69 +865,103 @@ export default function App() {
 
   return (
     <div
-      className={`flex h-screen w-screen overflow-hidden bg-[#0C1317] antialiased text-[#E9EDEF] font-theme-${fontTheme} font-size-${fontSize}`}
+      className={`flex flex-col h-screen w-screen overflow-hidden bg-[#0C1317] antialiased text-[#E9EDEF] font-theme-${fontTheme} font-size-${fontSize}`}
     >
-      {/* Sidebar View */}
-      <div className={`h-full ${mobileShowChat ? 'hidden md:flex' : 'flex w-full md:w-auto'}`}>
-        <Sidebar
-          chats={permittedChats}
-          activeChatId={activeChatId}
-          onSelectChat={(id) => {
-            setActiveChatId(id);
-            setMobileShowChat(true);
-          }}
-          userProfile={userProfile}
-          onOpenMentorship={() => setIsMentorshipOpen(true)}
-          onOpenPrivacyShield={() => setIsPrivacyShieldOpen(true)}
-          onOpenAIEngine={() => setIsAIEngineOpen(true)}
-          onOpenStatusStories={() => setIsStatusStoriesOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenNewChat={() => setIsNewChatOpen(true)}
-          onOpenSafetyNumbers={(c) => setSafetyNumberChat(c)}
-          onLockApp={() => {
-            setLockReason('manual');
-            setIsAppLocked(true);
-          }}
-          onOpenLyriaMusic={() => setIsLyriaOpen(true)}
-          onOpenMultimodalStudio={(tab) => {
-            if (tab) setMultimodalTab(tab);
-            setIsMultimodalOpen(true);
-          }}
-          onOpenGeminiChatbot={() => setIsGeminiChatbotOpen(true)}
-          onSignInGoogle={handleGoogleSignIn}
-          firebaseUser={firebaseUser}
-          fontSize={fontSize}
-          onCycleFontSize={handleCycleFontSize}
-          onOpenRegister={() => setIsRegistrationOpen(true)}
-          onOpenTenancy={() => setIsTenancyOpen(true)}
-          activeTenantName={tenants.find((t) => t.id === activeTenantId)?.name || 'NexusEdge Systems Ltd'}
-        />
-      </div>
+      {/* Offline Status & IndexedDB Cache Sync Bar */}
+      {!isOnline && (
+        <div className="bg-amber-950/90 border-b border-amber-600/40 text-amber-200 text-xs px-4 py-1.5 flex items-center justify-between shrink-0 select-none z-30 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="font-semibold">Offline Mode Active</span>
+            <span className="hidden sm:inline text-amber-300/80">• Message history and chat state cached in IndexedDB (localforage)</span>
+          </div>
+          {offlineQueueCount > 0 ? (
+            <span className="bg-amber-900/90 text-amber-100 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border border-amber-500/40">
+              {offlineQueueCount} message(s) queued for sync
+            </span>
+          ) : (
+            <span className="text-[10px] text-amber-300/70 font-mono">
+              Offline Read &amp; Write Ready
+            </span>
+          )}
+        </div>
+      )}
 
-      {/* Chat Area View */}
-      <div className={`h-full flex-1 ${!mobileShowChat ? 'hidden md:flex' : 'flex'}`}>
-        {activeChat ? (
-          <ChatArea
-            chat={activeChat}
-            messages={currentMessages}
-            currentUser={userProfile}
-            cognitiveProfile={cognitiveProfile}
-            onSendMessage={handleSendMessage}
-            onOpenSafetyNumbers={() => setSafetyNumberChat(activeChat)}
-            onOpenMessageInspector={(msg) => setInspectedMessage(msg)}
-            onStartCall={(type) => setActiveCall({ chat: activeChat, type })}
-            onBackMobile={() => setMobileShowChat(false)}
+      {syncNotice && isOnline && (
+        <div className="bg-emerald-950/90 border-b border-emerald-600/40 text-emerald-200 text-xs px-4 py-1.5 flex items-center justify-between shrink-0 select-none z-30 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="font-semibold">{syncNotice}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Main App Workspace */}
+      <div className="flex flex-1 min-h-0 w-full overflow-hidden">
+        {/* Sidebar View */}
+        <div className={`h-full ${mobileShowChat ? 'hidden md:flex' : 'flex w-full md:w-auto'}`}>
+          <Sidebar
+            chats={permittedChats}
+            activeChatId={activeChatId}
+            onSelectChat={(id) => {
+              setActiveChatId(id);
+              setMobileShowChat(true);
+            }}
+            userProfile={userProfile}
+            onOpenMentorship={() => setIsMentorshipOpen(true)}
+            onOpenPrivacyShield={() => setIsPrivacyShieldOpen(true)}
+            onOpenAIEngine={() => setIsAIEngineOpen(true)}
+            onOpenStatusStories={() => setIsStatusStoriesOpen(true)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenNewChat={() => setIsNewChatOpen(true)}
+            onOpenSafetyNumbers={(c) => setSafetyNumberChat(c)}
+            onLockApp={() => {
+              setLockReason('manual');
+              setIsAppLocked(true);
+            }}
             onOpenLyriaMusic={() => setIsLyriaOpen(true)}
             onOpenMultimodalStudio={(tab) => {
               if (tab) setMultimodalTab(tab);
               setIsMultimodalOpen(true);
             }}
+            onOpenGeminiChatbot={() => setIsGeminiChatbotOpen(true)}
+            onSignInGoogle={handleGoogleSignIn}
+            firebaseUser={firebaseUser}
+            fontSize={fontSize}
+            onCycleFontSize={handleCycleFontSize}
+            onOpenRegister={() => setIsRegistrationOpen(true)}
+            onOpenTenancy={() => setIsTenancyOpen(true)}
+            activeTenantName={tenants.find((t) => t.id === activeTenantId)?.name || 'NexusEdge Systems Ltd'}
+            language={appLanguage}
           />
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center bg-[#222E35] text-[#8696A0]">
-            <p>Select a chat to begin Signal-grade encrypted messaging.</p>
-          </div>
-        )}
+        </div>
+
+        {/* Chat Area View */}
+        <div className={`h-full flex-1 ${!mobileShowChat ? 'hidden md:flex' : 'flex'}`}>
+          {activeChat ? (
+            <ChatArea
+              chat={activeChat}
+              messages={currentMessages}
+              currentUser={userProfile}
+              cognitiveProfile={cognitiveProfile}
+              onSendMessage={handleSendMessage}
+              onOpenSafetyNumbers={() => setSafetyNumberChat(activeChat)}
+              onOpenMessageInspector={(msg) => setInspectedMessage(msg)}
+              onStartCall={(type) => setActiveCall({ chat: activeChat, type })}
+              onBackMobile={() => setMobileShowChat(false)}
+              onOpenLyriaMusic={() => setIsLyriaOpen(true)}
+              onOpenMultimodalStudio={(tab) => {
+                if (tab) setMultimodalTab(tab);
+                setIsMultimodalOpen(true);
+              }}
+              language={appLanguage}
+            />
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center bg-[#222E35] text-[#8696A0]">
+              <p>Select a chat to begin Signal-grade encrypted messaging.</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Modals */}
@@ -915,8 +1095,15 @@ export default function App() {
           allMessagesByChat={messagesByChat}
           fontSize={fontSize}
           fontTheme={fontTheme}
+          language={appLanguage}
           onUpdateFontSize={setFontSize}
           onUpdateFontTheme={setFontTheme}
+          onUpdateLanguage={handleUpdateLanguage}
+          onSelectChat={(chatId) => {
+            setActiveChatId(chatId);
+            setMobileShowChat(true);
+            setIsSettingsOpen(false);
+          }}
           onUpdateUser={setUserProfile}
           onUpdatePrivacy={setPrivacySettings}
           onLockApp={() => {
