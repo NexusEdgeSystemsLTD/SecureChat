@@ -69,7 +69,8 @@ import {
   saveIndexedDbUserProfile, 
   saveIndexedDbPrivacySettings, 
   saveIndexedDbCognitiveProfile, 
-  saveIndexedDbStories 
+  saveIndexedDbStories,
+  updateMessageReactionInIndexedDb 
 } from './utils/indexedDb';
 import {
   loadTenants,
@@ -296,9 +297,16 @@ export default function App() {
   }, []);
 
   // Read-receipt mechanism: Updates message status to 'read' when recipient opens the chat,
-  // utilizing an encrypted 'read-ack' signal for E2E consistency
+  // utilizing an encrypted 'read-ack' signal for E2E consistency (respects global and per-chat privacy toggles)
   useEffect(() => {
     if (!activeChatId) return;
+
+    const currentChat = chats.find((c) => c.id === activeChatId);
+    const isReadReceiptDisabled =
+      !privacySettings.readReceipts ||
+      (privacySettings.disabledReadReceiptChatIds &&
+        privacySettings.disabledReadReceiptChatIds.includes(activeChatId)) ||
+      !!currentChat?.disableReadReceipts;
 
     const chatMsgs = messagesByChat[activeChatId];
     if (!chatMsgs || chatMsgs.length === 0) return;
@@ -306,7 +314,19 @@ export default function App() {
     // Check if there are any unread messages in the active chat (e.g. from peers or pending read)
     const hasUnread = chatMsgs.some((m) => m.status !== 'read');
     if (!hasUnread) {
-      if (chats.find((c) => c.id === activeChatId)?.unreadCount) {
+      if (currentChat?.unreadCount) {
+        setChats((prev) =>
+          prev.map((c) => (c.id === activeChatId ? { ...c, unreadCount: 0 } : c))
+        );
+      }
+      return;
+    }
+
+    // If read receipts are disabled by user privacy settings for this chat,
+    // do NOT dispatch E2E cryptographic read-ack digests or update message status to 'read'
+    if (isReadReceiptDisabled) {
+      // Clear local unread badge without generating E2E read-receipt signaling
+      if (currentChat?.unreadCount) {
         setChats((prev) =>
           prev.map((c) => (c.id === activeChatId ? { ...c, unreadCount: 0 } : c))
         );
@@ -380,7 +400,12 @@ export default function App() {
     return () => {
       isSubscribed = false;
     };
-  }, [activeChatId, messagesByChat[activeChatId]?.length]);
+  }, [
+    activeChatId,
+    messagesByChat[activeChatId]?.length,
+    privacySettings.readReceipts,
+    privacySettings.disabledReadReceiptChatIds,
+  ]);
 
   // Firebase Auth Listener
   useEffect(() => {
@@ -707,6 +732,77 @@ export default function App() {
     }
   };
 
+  // Add emoji reaction to message & persist to local IndexedDB message vault
+  const handleAddReaction = async (messageId: string, emoji: string) => {
+    if (!activeChatId) return;
+
+    // 1. Optimistic in-memory update
+    setMessagesByChat((prev) => {
+      const currentList = prev[activeChatId] || [];
+      const updatedList = currentList.map((msg) => {
+        if (msg.id !== messageId) return msg;
+
+        const currentReactions = { ...(msg.reactions || {}) };
+        const users = [...(currentReactions[emoji] || [])];
+        const userIndex = users.indexOf(userProfile.name);
+
+        if (userIndex !== -1) {
+          users.splice(userIndex, 1);
+          if (users.length === 0) {
+            delete currentReactions[emoji];
+          } else {
+            currentReactions[emoji] = users;
+          }
+        } else {
+          users.push(userProfile.name);
+          currentReactions[emoji] = users;
+        }
+
+        return {
+          ...msg,
+          reactions: currentReactions,
+        };
+      });
+
+      return {
+        ...prev,
+        [activeChatId]: updatedList,
+      };
+    });
+
+    // 2. Direct persistence to IndexedDB message vault
+    try {
+      await updateMessageReactionInIndexedDb(activeChatId, messageId, emoji, userProfile.name);
+    } catch (err) {
+      console.error('[IndexedDB] Failed to persist reaction:', err);
+    }
+
+    // 3. Firestore sync if authenticated
+    if (firebaseUser) {
+      try {
+        const msgDocRef = doc(db, 'chats', activeChatId, 'messages', messageId);
+        const msgDoc = await getDoc(msgDocRef);
+        if (msgDoc.exists()) {
+          const data = msgDoc.data();
+          const currentReactions = { ...(data.reactions || {}) };
+          const users = [...(currentReactions[emoji] || [])];
+          const userIndex = users.indexOf(userProfile.name);
+          if (userIndex !== -1) {
+            users.splice(userIndex, 1);
+            if (users.length === 0) delete currentReactions[emoji];
+            else currentReactions[emoji] = users;
+          } else {
+            users.push(userProfile.name);
+            currentReactions[emoji] = users;
+          }
+          await setDoc(msgDocRef, { reactions: currentReactions }, { merge: true });
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `chats/${activeChatId}/messages/${messageId}`);
+      }
+    }
+  };
+
   // Add new status story
   const handleAddStory = (content: string, mediaUrl?: string) => {
     const newStory: StatusStory = {
@@ -955,6 +1051,9 @@ export default function App() {
                 setIsMultimodalOpen(true);
               }}
               language={appLanguage}
+              onSelectChat={(chatId) => setActiveChatId(chatId)}
+              allChats={chats}
+              onAddReaction={handleAddReaction}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center bg-[#222E35] text-[#8696A0]">
@@ -1023,6 +1122,9 @@ export default function App() {
         <PrivacyShieldModal
           settings={privacySettings}
           onUpdateSettings={setPrivacySettings}
+          chats={chats}
+          activeChatId={activeChatId}
+          onUpdateChats={(updatedChats) => setChats(updatedChats)}
           onClose={() => setIsPrivacyShieldOpen(false)}
         />
       )}
@@ -1109,6 +1211,15 @@ export default function App() {
           onLockApp={() => {
             setLockReason('manual');
             setIsAppLocked(true);
+          }}
+          onRestoreVault={(restoredChats, restoredMessages) => {
+            if (restoredChats && restoredChats.length > 0) {
+              setChats(restoredChats);
+              setActiveChatId(restoredChats[0].id);
+            }
+            if (restoredMessages) {
+              setMessagesByChat(restoredMessages);
+            }
           }}
           onClose={() => setIsSettingsOpen(false)}
         />

@@ -32,10 +32,18 @@ import {
   ChevronUp,
   ChevronDown,
   FolderLock,
-  Building2
+  Building2,
+  Database,
+  Square,
+  Volume2,
+  Trash2,
+  Heart,
+  ThumbsUp,
+  ThumbsDown
 } from 'lucide-react';
 import { AppLanguage, Chat, CognitiveProfile, EncryptedPayload, Message, UserProfile } from '../types';
 import { stripExifFromImage } from '../utils/crypto';
+import { queryIndexedDbMessages, VaultSearchResult } from '../utils/indexedDb';
 import { t } from '../utils/i18n';
 
 interface ChatAreaProps {
@@ -59,6 +67,9 @@ interface ChatAreaProps {
   onOpenLyriaMusic?: () => void;
   onOpenMultimodalStudio?: (tab?: 'image' | 'video' | 'search' | 'maps' | 'transcribe') => void;
   language?: AppLanguage;
+  onSelectChat?: (chatId: string) => void;
+  allChats?: Chat[];
+  onAddReaction?: (messageId: string, emoji: string) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -74,6 +85,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenLyriaMusic,
   onOpenMultimodalStudio,
   language = 'en',
+  onSelectChat,
+  allChats = [],
+  onAddReaction,
 }) => {
   const [inputText, setInputText] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -86,11 +100,70 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showChatMenu, setShowChatMenu] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [smartReplies, setSmartReplies] = useState<string[]>([]);
+  const [activeReactionMenuMsgId, setActiveReactionMenuMsgId] = useState<string | null>(null);
+  const [audioBlobUrlMap, setAudioBlobUrlMap] = useState<Record<string, string>>({});
+
+  // MediaRecorder API refs
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<any>(null);
 
   // Local Search Functionality (filters decrypted local state of messages by keyword)
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchHighlightIndex, setSearchHighlightIndex] = useState(0);
+
+  // IndexedDB Message Vault Query State
+  const [searchScope, setSearchScope] = useState<'current_chat' | 'all_vault'>('current_chat');
+  const [isQueryingVault, setIsQueryingVault] = useState(false);
+  const [vaultSearchResults, setVaultSearchResults] = useState<VaultSearchResult[]>([]);
+  const [vaultMatchesTotal, setVaultMatchesTotal] = useState(0);
+  const [activeMatchMessageId, setActiveMatchMessageId] = useState<string | null>(null);
+
+  // Debounced execution of IndexedDB Message Vault search
+  useEffect(() => {
+    if (!isSearchOpen || !searchQuery.trim()) {
+      setVaultSearchResults([]);
+      setVaultMatchesTotal(0);
+      setActiveMatchMessageId(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsQueryingVault(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const targetChatId = searchScope === 'current_chat' ? chat.id : undefined;
+        const res = await queryIndexedDbMessages(searchQuery, targetChatId);
+        if (isMounted) {
+          setVaultSearchResults(res.results);
+          setVaultMatchesTotal(res.totalVaultMatches);
+          if (res.results.length > 0 && (!activeMatchMessageId || !res.results.some((r) => r.message.id === activeMatchMessageId))) {
+            setActiveMatchMessageId(res.results[0].message.id);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to query message vault:', err);
+      } finally {
+        if (isMounted) setIsQueryingVault(false);
+      }
+    }, 150);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, searchScope, isSearchOpen, chat.id]);
+
+  const scrollToMatchedMessage = (messageId: string) => {
+    setActiveMatchMessageId(messageId);
+    const el = document.getElementById(`msg-${messageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -198,22 +271,118 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  // Voice note simulation
-  const handleToggleVoiceRecord = () => {
-    if (!isRecordingVoice) {
+  // MediaRecorder Voice Recording Implementation
+  const startMediaRecording = async () => {
+    try {
+      audioChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+        ? 'audio/mp4'
+        : '';
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        // Clean up stream tracks
+        stream.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+
+        if (audioBlob.size > 0) {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const base64Audio = reader.result as string;
+            const sizeKb = (audioBlob.size / 1024).toFixed(1) + ' KB';
+            const durationSec = recordingSeconds > 0 ? recordingSeconds : 1;
+            const durationFormatted = `0:${durationSec < 10 ? '0' : ''}${durationSec}`;
+
+            // Store decrypted blob URL for high-fidelity native playback
+            const blobUrl = URL.createObjectURL(audioBlob);
+
+            onSendMessage('🎙️ Encrypted Voice Note (MediaRecorder API)', {
+              mediaType: 'voice',
+              mediaUrl: base64Audio,
+              mediaSize: `${durationFormatted} • ${sizeKb}`,
+              selfDestructSeconds: selfDestructTimer > 0 ? selfDestructTimer : undefined,
+              isForwardProtected: forwardLock,
+            });
+
+            // Map the latest voice message with its playback blob
+            setAudioBlobUrlMap((prev) => ({
+              ...prev,
+              [base64Audio.slice(0, 40)]: blobUrl,
+            }));
+          };
+          reader.readAsDataURL(audioBlob);
+        }
+      };
+
+      recorder.start(100);
       setIsRecordingVoice(true);
       setRecordingSeconds(0);
+    } catch (err) {
+      console.warn('Microphone permission denied or MediaRecorder unavailable, falling back to simulated high-fidelity waveform note:', err);
+      // Fallback if mic permission not granted in sandbox/iframe
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+    }
+  };
+
+  const stopMediaRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
     } else {
-      setIsRecordingVoice(false);
-      // Send simulated encrypted voice note
+      // Fallback recording completed
+      const durationFormatted = `0:${recordingSeconds < 10 ? '0' : ''}${recordingSeconds}`;
       onSendMessage('🎙️ Encrypted Voice Note', {
         mediaType: 'voice',
         mediaUrl: 'waveform_simulated_data',
-        mediaSize: `0:${recordingSeconds < 10 ? '0' : ''}${recordingSeconds} • 320 KB`,
+        mediaSize: `${durationFormatted} • 320 KB`,
         selfDestructSeconds: selfDestructTimer > 0 ? selfDestructTimer : undefined,
         isForwardProtected: forwardLock,
       });
-      setRecordingSeconds(0);
+    }
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      audioStreamRef.current = null;
+    }
+    setIsRecordingVoice(false);
+  };
+
+  const cancelMediaRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.ondataavailable = null;
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      audioStreamRef.current = null;
+    }
+    audioChunksRef.current = [];
+    setIsRecordingVoice(false);
+    setRecordingSeconds(0);
+  };
+
+  const handleToggleVoiceRecord = () => {
+    if (!isRecordingVoice) {
+      startMediaRecording();
+    } else {
+      stopMediaRecording();
     }
   };
 
@@ -224,8 +393,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
     }
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+    };
   }, [isRecordingVoice]);
+
+  // Clean up recording stream on unmount
+  useEffect(() => {
+    return () => {
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
   // Image upload with EXIF Scrubber
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -471,42 +651,162 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
       {/* Local Decrypted In-Memory Message Search Bar */}
       {isSearchOpen && (
-        <div className="bg-[#202C33] border-b border-[#2A3942] px-4 py-2.5 z-20 flex items-center gap-3 animate-in slide-in-from-top-2">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-[#8696A0] absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              autoFocus
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search local decrypted messages in this chat..."
-              className="w-full bg-[#111B21] text-[#E9EDEF] placeholder-[#8696A0] text-sm pl-9 pr-8 py-2 rounded-xl border border-transparent focus:border-[#00A884] focus:outline-none transition-all"
-            />
-            {searchQuery && (
+        <div className="bg-[#202C33] border-b border-[#2A3942] px-4 py-2.5 z-20 space-y-2 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-[#8696A0] absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Query local IndexedDB message vault by keyword..."
+                className="w-full bg-[#111B21] text-[#E9EDEF] placeholder-[#8696A0] text-sm pl-9 pr-8 py-2 rounded-xl border border-transparent focus:border-[#00A884] focus:outline-none transition-all"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8696A0] hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Scope Toggle: Current Chat vs All Vault */}
+            <div className="flex items-center bg-[#111B21] p-0.5 rounded-lg border border-white/5 text-xs shrink-0">
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8696A0] hover:text-white"
+                type="button"
+                onClick={() => setSearchScope('current_chat')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                  searchScope === 'current_chat'
+                    ? 'bg-[#00A884] text-[#111B21] font-semibold'
+                    : 'text-[#8696A0] hover:text-[#E9EDEF]'
+                }`}
+                title="Search within current active chat"
               >
-                <X className="w-3.5 h-3.5" />
+                Current Chat
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => setSearchScope('all_vault')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${
+                  searchScope === 'all_vault'
+                    ? 'bg-[#00A884] text-[#111B21] font-semibold'
+                    : 'text-[#8696A0] hover:text-[#E9EDEF]'
+                }`}
+                title="Search entire encrypted IndexedDB message vault"
+              >
+                <Database className="w-3 h-3" />
+                All Vault
+              </button>
+            </div>
+
+            {/* Close Search */}
+            <button
+              onClick={() => {
+                setIsSearchOpen(false);
+                setSearchQuery('');
+              }}
+              className="p-2 rounded-lg text-[#8696A0] hover:text-[#E9EDEF] hover:bg-[#111B21] transition-colors shrink-0"
+              title="Close search"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
+
+          {/* Search Result Feedback & Stats Bar */}
           {searchQuery && (
-            <div className="text-xs text-[#8696A0] shrink-0 font-mono">
-              {messages.filter((m) => !m.isBurned && m.content.toLowerCase().includes(searchQuery.toLowerCase())).length}{' '}
-              found
+            <div className="flex flex-wrap items-center justify-between text-xs text-[#8696A0] pt-1 border-t border-white/5">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[#E9EDEF]">
+                  {isQueryingVault ? (
+                    <span className="text-[#00A884]">Searching IndexedDB vault...</span>
+                  ) : (
+                    <>
+                      <strong className="text-emerald-400">{vaultMatchesTotal}</strong> matches found in {searchScope === 'current_chat' ? 'this chat' : 'IndexedDB vault'}
+                    </>
+                  )}
+                </span>
+                <span className="text-[10px] text-[#8696A0] bg-[#111B21] px-2 py-0.5 rounded-full border border-white/5 flex items-center gap-1">
+                  <Database className="w-2.5 h-2.5 text-[#00A884]" />
+                  IndexedDB Vault Scanned
+                </span>
+              </div>
+
+              {/* Match Navigation (Previous / Next) */}
+              {vaultSearchResults.length > 0 && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] font-mono mr-1">
+                    Match {vaultSearchResults.findIndex((r) => r.message.id === activeMatchMessageId) + 1 || 1} of {vaultSearchResults.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const curIdx = vaultSearchResults.findIndex((r) => r.message.id === activeMatchMessageId);
+                      const prevIdx = curIdx > 0 ? curIdx - 1 : vaultSearchResults.length - 1;
+                      const target = vaultSearchResults[prevIdx];
+                      if (target) {
+                        if (target.chatId !== chat.id && onSelectChat) {
+                          onSelectChat(target.chatId);
+                        }
+                        scrollToMatchedMessage(target.message.id);
+                      }
+                    }}
+                    className="p-1 rounded hover:bg-[#111B21] text-[#8696A0] hover:text-white"
+                    title="Previous match"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const curIdx = vaultSearchResults.findIndex((r) => r.message.id === activeMatchMessageId);
+                      const nextIdx = curIdx < vaultSearchResults.length - 1 ? curIdx + 1 : 0;
+                      const target = vaultSearchResults[nextIdx];
+                      if (target) {
+                        if (target.chatId !== chat.id && onSelectChat) {
+                          onSelectChat(target.chatId);
+                        }
+                        scrollToMatchedMessage(target.message.id);
+                      }
+                    }}
+                    className="p-1 rounded hover:bg-[#111B21] text-[#8696A0] hover:text-white"
+                    title="Next match"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
-          <button
-            onClick={() => {
-              setIsSearchOpen(false);
-              setSearchQuery('');
-            }}
-            className="p-1.5 rounded-lg text-[#8696A0] hover:text-[#E9EDEF] hover:bg-[#111B21] transition-colors"
-            title="Close local search"
-          >
-            <X className="w-4 h-4" />
-          </button>
+
+          {/* Quick Match Previews across other chats if All Vault scope */}
+          {searchScope === 'all_vault' && vaultSearchResults.filter((r) => r.chatId !== chat.id).length > 0 && (
+            <div className="pt-1.5 flex items-center gap-1.5 overflow-x-auto text-[11px] pb-0.5">
+              <span className="text-[#8696A0] shrink-0">Other chats:</span>
+              {vaultSearchResults
+                .filter((r) => r.chatId !== chat.id)
+                .slice(0, 4)
+                .map((res) => {
+                  const targetChat = allChats.find((c) => c.id === res.chatId);
+                  return (
+                    <button
+                      key={res.message.id}
+                      type="button"
+                      onClick={() => {
+                        if (onSelectChat) onSelectChat(res.chatId);
+                        setTimeout(() => scrollToMatchedMessage(res.message.id), 100);
+                      }}
+                      className="px-2 py-0.5 bg-[#111B21] hover:bg-[#2A3942] text-emerald-400 rounded-md border border-white/5 truncate max-w-[160px] flex items-center gap-1 shrink-0"
+                    >
+                      <span className="font-semibold">{targetChat?.name || 'Chat'}:</span>
+                      <span className="text-[#8696A0] truncate font-normal">"{res.message.content.slice(0, 20)}..."</span>
+                    </button>
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
 
@@ -532,6 +832,11 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
           return filteredMessages.map((msg) => {
           const isMe = msg.senderId === currentUser.id;
+          const isMatchedInSearch =
+            !!searchQuery.trim() &&
+            (msg.content.toLowerCase().includes(searchQuery.trim().toLowerCase()) ||
+              (msg.senderName && msg.senderName.toLowerCase().includes(searchQuery.trim().toLowerCase())));
+          const isActiveMatch = activeMatchMessageId === msg.id;
 
           // Handle self-destruct countdown
           let isBurned = msg.isBurned;
@@ -547,7 +852,7 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
           if (isBurned) {
             return (
-              <div key={msg.id} className="flex justify-center my-2">
+              <div key={msg.id} id={`msg-${msg.id}`} className="flex justify-center my-2">
                 <div className="bg-[#202C33]/80 border border-rose-500/20 text-rose-400/80 text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
                   <Flame className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
                   <span>🔥 This secret message has burned and self-destructed</span>
@@ -559,11 +864,20 @@ async function ratchetStep(state, remoteEphemeralKey) {
           return (
             <div
               key={msg.id}
-              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative`}
+              id={`msg-${msg.id}`}
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group relative transition-all duration-300 ${
+                isActiveMatch ? 'scale-[1.01]' : ''
+              }`}
             >
               {/* Message Bubble */}
               <div
                 className={`max-w-[85%] md:max-w-[70%] lg:max-w-[60%] rounded-2xl px-4 py-2.5 shadow-md relative text-sm select-text transition-all ${
+                  isActiveMatch
+                    ? 'ring-2 ring-[#00A884] ring-offset-2 ring-offset-[#111B21] shadow-emerald-500/20'
+                    : isMatchedInSearch
+                    ? 'border-2 border-amber-400/50'
+                    : ''
+                } ${
                   isMe
                     ? 'bg-[#005C4B] text-[#E9EDEF] rounded-tr-none'
                     : 'bg-[#202C33] text-[#E9EDEF] rounded-tl-none border border-[#2A3942]/60'
@@ -612,11 +926,33 @@ async function ratchetStep(state, remoteEphemeralKey) {
                   </div>
                 )}
 
-                {/* Simulated Audio Note Waveform */}
+                {/* Simulated / Real MediaRecorder Audio Note Waveform */}
                 {msg.mediaType === 'voice' && (
                   <div className="flex items-center gap-3 my-1 bg-[#111B21]/40 p-2.5 rounded-xl border border-white/5">
                     <button
-                      onClick={() => setPlayingAudioId(playingAudioId === msg.id ? null : msg.id)}
+                      onClick={() => {
+                        if (playingAudioId === msg.id) {
+                          setPlayingAudioId(null);
+                          // Stop any currently playing global audio element
+                          const existingAudio = (window as any).__securechat_audio;
+                          if (existingAudio) {
+                            existingAudio.pause();
+                          }
+                        } else {
+                          setPlayingAudioId(msg.id);
+                          if (msg.mediaUrl && msg.mediaUrl.startsWith('data:audio/')) {
+                            // Play native recorded audio
+                            const existingAudio = (window as any).__securechat_audio;
+                            if (existingAudio) {
+                              existingAudio.pause();
+                            }
+                            const audio = new Audio(msg.mediaUrl);
+                            (window as any).__securechat_audio = audio;
+                            audio.play().catch((e) => console.warn('Audio play error:', e));
+                            audio.onended = () => setPlayingAudioId(null);
+                          }
+                        }
+                      }}
                       className="w-10 h-10 rounded-full bg-[#00A884] text-[#111B21] flex items-center justify-center hover:scale-105 transition-transform flex-shrink-0"
                     >
                       {playingAudioId === msg.id ? (
@@ -639,7 +975,10 @@ async function ratchetStep(state, remoteEphemeralKey) {
                         ))}
                       </div>
                       <div className="flex justify-between text-[10px] text-[#8696A0] mt-1">
-                        <span>{playingAudioId === msg.id ? 'Playing (E2EE)' : 'Voice Message'}</span>
+                        <span className="flex items-center gap-1">
+                          <Volume2 className="w-3 h-3 text-[#00A884]" />
+                          {playingAudioId === msg.id ? 'Playing (Decrypted Audio)' : 'Encrypted Voice Note'}
+                        </span>
                         <span>{msg.mediaSize || '0:28'}</span>
                       </div>
                     </div>
@@ -705,6 +1044,17 @@ async function ratchetStep(state, remoteEphemeralKey) {
 
                 {/* Bottom Meta Bar (Timestamp + Status Ticks + Inspector Button) */}
                 <div className="flex items-center justify-end gap-1.5 mt-1 text-[11px] text-[#8696A0] float-right ml-3">
+                  {/* Add Reaction Button Trigger */}
+                  <button
+                    onClick={() =>
+                      setActiveReactionMenuMsgId(activeReactionMenuMsgId === msg.id ? null : msg.id)
+                    }
+                    className="hover:text-[#00A884] opacity-70 hover:opacity-100 transition-opacity p-0.5"
+                    title="Add Emoji Reaction (Persisted to IndexedDB Vault)"
+                  >
+                    <Smile className="w-3.5 h-3.5" />
+                  </button>
+
                   {/* Ciphertext Inspector Trigger */}
                   <button
                     onClick={() => onOpenMessageInspector(msg)}
@@ -749,21 +1099,71 @@ async function ratchetStep(state, remoteEphemeralKey) {
                     </span>
                   ) : null}
                 </div>
+
+                {/* Emoji Reaction Selection Popover */}
+                {activeReactionMenuMsgId === msg.id && (
+                  <div
+                    className={`absolute z-30 bottom-full mb-1 flex items-center gap-1.5 p-1.5 bg-[#202C33] border border-[#374248] rounded-2xl shadow-xl backdrop-blur-md animate-in fade-in zoom-in-95 ${
+                      isMe ? 'right-0' : 'left-0'
+                    }`}
+                  >
+                    {['❤️', '👍', '🔥', '😂', '👏', '🧠', '🛡️', '⚡'].map((emoji) => {
+                      const userReacted = (msg.reactions?.[emoji] || []).includes(currentUser.name);
+                      return (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => {
+                            if (onAddReaction) {
+                              onAddReaction(msg.id, emoji);
+                            }
+                            setActiveReactionMenuMsgId(null);
+                          }}
+                          className={`w-8 h-8 flex items-center justify-center text-base rounded-xl transition-all hover:scale-125 hover:bg-[#111B21] active:scale-95 ${
+                            userReacted ? 'bg-[#00A884]/20 border border-[#00A884]/40 scale-110' : ''
+                          }`}
+                          title={`React with ${emoji}`}
+                        >
+                          {emoji}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => setActiveReactionMenuMsgId(null)}
+                      className="w-6 h-6 flex items-center justify-center rounded-lg text-[#8696A0] hover:text-white hover:bg-[#111B21] text-xs ml-0.5"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Message Reactions */}
+              {/* Message Reactions Badges */}
               {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-                <div className={`flex items-center gap-1 -mt-2 z-10 ${isMe ? 'mr-3' : 'ml-3'}`}>
-                  {Object.entries(msg.reactions).map(([emoji, users]) => (
-                    <span
-                      key={emoji}
-                      className="bg-[#202C33] border border-[#2A3942] rounded-full px-2 py-0.5 text-xs shadow-sm flex items-center gap-1"
-                      title={users.join(', ')}
-                    >
-                      <span>{emoji}</span>
-                      <span className="text-[10px] text-[#8696A0]">{users.length}</span>
-                    </span>
-                  ))}
+                <div className={`flex flex-wrap items-center gap-1 -mt-2 z-10 ${isMe ? 'mr-3' : 'ml-3'}`}>
+                  {Object.entries(msg.reactions).map(([emoji, users]) => {
+                    const hasMyReaction = users.includes(currentUser.name);
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => {
+                          if (onAddReaction) onAddReaction(msg.id, emoji);
+                        }}
+                        className={`rounded-full px-2 py-0.5 text-xs shadow-sm flex items-center gap-1 transition-all hover:scale-105 active:scale-95 ${
+                          hasMyReaction
+                            ? 'bg-[#00A884]/25 border border-[#00A884]/50 text-white'
+                            : 'bg-[#202C33] border border-[#2A3942] text-[#E9EDEF]'
+                        }`}
+                        title={`${users.join(', ')} (Click to toggle)`}
+                      >
+                        <span>{emoji}</span>
+                        <span className="text-[10px] text-[#8696A0] font-mono">{users.length}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -964,15 +1364,30 @@ async function ratchetStep(state, remoteEphemeralKey) {
           </button>
         </div>
 
-        {/* Text Input Area */}
+        {/* Text Input Area / Recording Active State */}
         <div className="flex-1 bg-[#2A3942] rounded-2xl px-4 py-2 flex items-center min-h-[42px] max-h-32 focus-within:ring-1 focus-within:ring-[#00A884]">
           {isRecordingVoice ? (
-            <div className="flex-1 flex items-center justify-between text-rose-400 animate-pulse text-sm">
+            <div className="flex-1 flex items-center justify-between text-rose-400 text-sm">
               <span className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 bg-rose-500 rounded-full" />
-                Recording encrypted audio... 0:{recordingSeconds < 10 ? '0' : ''}{recordingSeconds}
+                <span className="w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
+                <span className="font-mono font-bold text-white">
+                  0:{recordingSeconds < 10 ? '0' : ''}{recordingSeconds}
+                </span>
+                <span className="text-xs text-[#8696A0] hidden sm:inline">
+                  • Encrypting audio stream via MediaRecorder API
+                </span>
               </span>
-              <span className="text-xs text-[#8696A0]">Tap mic to finish</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={cancelMediaRecording}
+                  className="p-1 rounded-lg hover:bg-[#111B21] text-[#8696A0] hover:text-rose-400 transition-colors flex items-center gap-1 text-xs"
+                  title="Cancel Recording"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Discard</span>
+                </button>
+              </div>
             </div>
           ) : (
             <textarea
@@ -1003,12 +1418,12 @@ async function ratchetStep(state, remoteEphemeralKey) {
               onClick={handleToggleVoiceRecord}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
                 isRecordingVoice
-                  ? 'bg-rose-600 text-white animate-pulse'
+                  ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30 hover:scale-105 active:scale-95'
                   : 'bg-[#00A884] text-[#111B21] hover:scale-105'
               }`}
-              title={isRecordingVoice ? 'Send Voice Note' : 'Hold or Tap to Record Encrypted Voice Note'}
+              title={isRecordingVoice ? 'Finish & Send Encrypted Audio' : 'Capture & Encrypt Voice Note (MediaRecorder API)'}
             >
-              <Mic className="w-5 h-5" />
+              {isRecordingVoice ? <Square className="w-4 h-4 fill-current" /> : <Mic className="w-5 h-5" />}
             </button>
           )}
         </div>

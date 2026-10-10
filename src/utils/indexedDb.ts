@@ -1,5 +1,5 @@
 import localforage from 'localforage';
-import { Chat, CognitiveProfile, Message, PrivacySettings, StatusStory, UserProfile } from '../types';
+import { Chat, CognitiveProfile, Message, PrivacySettings, ScheduledMessage, StatusStory, UserProfile } from '../types';
 import { encryptMessage, decryptMessage, computeFingerprint } from './crypto';
 
 /**
@@ -23,6 +23,7 @@ const VAULT_KEYS = {
   STORIES: 'vault_ephemeral_stories',
   BIOMETRIC_LOCK: 'vault_biometric_security_config',
   OFFLINE_QUEUE: 'vault_offline_sync_queue',
+  SCHEDULED_MESSAGES: 'vault_scheduled_messages',
   LAST_SYNC: 'vault_last_synced_timestamp',
 };
 
@@ -87,6 +88,59 @@ export async function saveIndexedDbMessages(messagesByChat: Record<string, Messa
     console.error('[IndexedDB localforage] Failed to save messages:', err);
   }
 }
+
+/**
+ * Persists an emoji reaction to a specific message in the local IndexedDB message vault.
+ * Adds or toggles the user's reaction, ensuring persistent local offline storage.
+ */
+export async function updateMessageReactionInIndexedDb(
+  chatId: string,
+  messageId: string,
+  emoji: string,
+  userName: string
+): Promise<Record<string, string[]> | null> {
+  try {
+    const vaultMessages = (await loadIndexedDbMessages()) || {};
+    const chatMsgs = vaultMessages[chatId] || [];
+    let updatedReactions: Record<string, string[]> | null = null;
+
+    const updatedList = chatMsgs.map((msg) => {
+      if (msg.id !== messageId) return msg;
+
+      const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
+      const usersForEmoji = [...(currentReactions[emoji] || [])];
+      const userIndex = usersForEmoji.indexOf(userName);
+
+      if (userIndex !== -1) {
+        // Toggle off reaction if user already reacted with this emoji
+        usersForEmoji.splice(userIndex, 1);
+        if (usersForEmoji.length === 0) {
+          delete currentReactions[emoji];
+        } else {
+          currentReactions[emoji] = usersForEmoji;
+        }
+      } else {
+        // Add reaction
+        usersForEmoji.push(userName);
+        currentReactions[emoji] = usersForEmoji;
+      }
+
+      updatedReactions = currentReactions;
+      return {
+        ...msg,
+        reactions: currentReactions,
+      };
+    });
+
+    vaultMessages[chatId] = updatedList;
+    await saveIndexedDbMessages(vaultMessages);
+    return updatedReactions;
+  } catch (err) {
+    console.error('[IndexedDB localforage] Failed to update message reaction in vault:', err);
+    return null;
+  }
+}
+
 
 // ==================== USER PROFILE CACHE ====================
 
@@ -248,6 +302,50 @@ export async function clearOfflineQueue(): Promise<void> {
   }
 }
 
+// ==================== SCHEDULED MESSAGES VAULT ====================
+
+export async function loadIndexedDbScheduledMessages(): Promise<ScheduledMessage[]> {
+  try {
+    const list = await secureChatVault.getItem<ScheduledMessage[]>(VAULT_KEYS.SCHEDULED_MESSAGES);
+    return Array.isArray(list) ? list : [];
+  } catch (err) {
+    console.warn('[IndexedDB localforage] Failed to read scheduled messages:', err);
+    return [];
+  }
+}
+
+export async function saveIndexedDbScheduledMessages(scheduled: ScheduledMessage[]): Promise<void> {
+  try {
+    await secureChatVault.setItem(VAULT_KEYS.SCHEDULED_MESSAGES, scheduled);
+  } catch (err) {
+    console.error('[IndexedDB localforage] Failed to save scheduled messages:', err);
+  }
+}
+
+export async function addIndexedDbScheduledMessage(item: ScheduledMessage): Promise<ScheduledMessage[]> {
+  try {
+    const current = await loadIndexedDbScheduledMessages();
+    const updated = [...current.filter((m) => m.id !== item.id), item];
+    await saveIndexedDbScheduledMessages(updated);
+    return updated;
+  } catch (err) {
+    console.error('[IndexedDB localforage] Failed to add scheduled message:', err);
+    return [];
+  }
+}
+
+export async function removeIndexedDbScheduledMessage(id: string): Promise<ScheduledMessage[]> {
+  try {
+    const current = await loadIndexedDbScheduledMessages();
+    const updated = current.filter((m) => m.id !== id);
+    await saveIndexedDbScheduledMessages(updated);
+    return updated;
+  } catch (err) {
+    console.error('[IndexedDB localforage] Failed to remove scheduled message:', err);
+    return [];
+  }
+}
+
 export async function saveIndexedDbActiveChatId(chatId: string): Promise<void> {
   try {
     await secureChatVault.setItem('vault_active_chat_id', chatId);
@@ -263,6 +361,86 @@ export async function loadIndexedDbActiveChatId(): Promise<string | null> {
     return null;
   }
 }
+
+// ==================== LOCAL INDEXEDDB MESSAGE VAULT SEARCH ====================
+
+export interface VaultSearchResult {
+  message: Message;
+  chatId: string;
+  matchedText: string;
+  matchIndex: number;
+}
+
+/**
+ * Queries the persistent local IndexedDB sovereign message vault by keyword.
+ * Allows searching across the entire vault or scoped to a specific chat,
+ * matching plaintext content, sender names, media filenames, or academic topics.
+ */
+export async function queryIndexedDbMessages(
+  keyword: string,
+  targetChatId?: string
+): Promise<{
+  results: VaultSearchResult[];
+  totalVaultMatches: number;
+  searchedChatsCount: number;
+}> {
+  const query = keyword.trim().toLowerCase();
+  if (!query) {
+    return { results: [], totalVaultMatches: 0, searchedChatsCount: 0 };
+  }
+
+  try {
+    const vaultMessages = await loadIndexedDbMessages();
+    if (!vaultMessages || typeof vaultMessages !== 'object') {
+      return { results: [], totalVaultMatches: 0, searchedChatsCount: 0 };
+    }
+
+    const chatEntries = Object.entries(vaultMessages);
+    const results: VaultSearchResult[] = [];
+    let searchedChatsCount = 0;
+
+    for (const [cId, msgList] of chatEntries) {
+      if (!Array.isArray(msgList)) continue;
+      if (targetChatId && cId !== targetChatId) continue;
+
+      searchedChatsCount++;
+      for (const msg of msgList) {
+        if (!msg || msg.isBurned) continue;
+
+        const content = (msg.content || '').toLowerCase();
+        const sender = (msg.senderName || '').toLowerCase();
+        const mediaName = (msg.mediaName || '').toLowerCase();
+        const topic = (msg.academicMetadata?.topic || '').toLowerCase();
+
+        const matchIdx = content.indexOf(query);
+        const matchesContent = matchIdx !== -1;
+        const matchesMeta = sender.includes(query) || mediaName.includes(query) || topic.includes(query);
+
+        if (matchesContent || matchesMeta) {
+          results.push({
+            message: msg,
+            chatId: cId,
+            matchedText: msg.content,
+            matchIndex: matchIdx !== -1 ? matchIdx : 0,
+          });
+        }
+      }
+    }
+
+    // Sort newest first
+    results.sort((a, b) => b.message.timestamp - a.message.timestamp);
+
+    return {
+      results,
+      totalVaultMatches: results.length,
+      searchedChatsCount,
+    };
+  } catch (err) {
+    console.error('[IndexedDB localforage] Error querying message vault by keyword:', err);
+    return { results: [], totalVaultMatches: 0, searchedChatsCount: 0 };
+  }
+}
+
 
 // ==================== VAULT DIAGNOSTICS & STATS ====================
 

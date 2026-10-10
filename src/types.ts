@@ -47,6 +47,25 @@ export interface Message {
   };
   readAckSignature?: string; // Encrypted read-ack signal MAC
   readAt?: number;
+  scheduledFor?: number; // Epoch timestamp for future dispatch
+  isScheduled?: boolean;
+}
+
+export interface ScheduledMessage {
+  id: string;
+  chatId: string;
+  content: string;
+  scheduledFor: number;
+  createdAt: number;
+  options?: {
+    mediaType?: 'text' | 'image' | 'voice' | 'doc' | 'code' | 'academic_paper';
+    mediaUrl?: string;
+    mediaName?: string;
+    mediaSize?: string;
+    selfDestructSeconds?: number;
+    isForwardProtected?: boolean;
+    academicMetadata?: any;
+  };
 }
 
 export type AppFontSize = 'small' | 'medium' | 'large' | 'extra';
@@ -82,6 +101,7 @@ export interface Chat {
   topic?: string;
   tenantId?: string; // Multi-tenant organization isolation
   departmentId?: string; // Department boundary isolation
+  disableReadReceipts?: boolean; // E2E signaling privacy: omit read-ack generation for this chat
 }
 
 export type OrgRole = 'MD' | 'CTO' | 'DAF' | 'DEPT_HEAD' | 'MEMBER' | 'CITIZEN';
@@ -195,6 +215,7 @@ export interface PrivacySettings {
   forwardProtection: boolean;
   callRelayAlways: boolean;
   readReceipts: boolean;
+  disabledReadReceiptChatIds?: string[]; // Chat-specific read receipt exclusions for granular E2E signaling privacy
   lastSeenVisibility: 'everyone' | 'contacts' | 'nobody';
   profilePhotoVisibility: 'everyone' | 'contacts' | 'nobody';
   onlineIndicator: boolean;
